@@ -43,8 +43,8 @@
 //! F032-F033 PPU Address
 //! F034      PPU Data
 //! F035      PPU DMA Control
-//! F036-F037 PPU DMA Src Address
-//! F038-F039 PPU DMA Dst Address
+//! F036-F037 PPU DMA Address (src in RAM, dst is the PPU address)
+//! F038-F039 PPU DMA Length
 //! F03A      PPU BG Scroll-X
 //! F03B      PPU BG Scroll-Y
 //! F03C      PPU FG Scroll-X
