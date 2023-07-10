@@ -9,6 +9,14 @@
 //! PPU has 2 resolutions? (640x480 and 1024x768) since it
 //! internally maintains a 1024x1024 plane of tiles.
 //!
+//! 32 sprites per line!
+//!
+//! TODO: Use WGPU to implement PPU in hardware. Scroll effects
+//!   can be implemented by rendering the BG and FG first to a
+//!   texture, and then sample into the texture in the pixel shader.
+//!   The same would have to be done for sprites... so I don't know.
+//!   I could just _not_ support such effects for sprites.
+//!
 //! Memory Map:
 //!
 //! 0000-0FFF RAM0 (Fixed)
