@@ -3,18 +3,21 @@
 //! The Possum2 has a:
 //! * 65CE02 CPU
 //! * 2 6551 UARTs
-//! * NES-ish PPU with external VRAM and DMA
+//! * NES/GBC-ish PPU with external VRAM and DMA
 //! * Banked RAM
+//!
+//! PPU has 2 resolutions? (640x480 and 1024x768) since it
+//! internally maintains a 1024x1024 plane of tiles.
 //!
 //! Memory Map:
 //!
-//! F100-FFFF ROM
-//! F000-F0FF IO
-//! C000-EFFF RAM4
-//! 8000-BFFF RAM3
-//! 4000-7FFF RAM2
-//! 1000-3FFF RAM1
 //! 0000-0FFF RAM0 (Fixed)
+//! 1000-3FFF RAM1
+//! 4000-7FFF RAM2
+//! 8000-BFFF RAM3
+//! C000-EFFF RAM4
+//! F000-F0FF IO
+//! F100-FFFF ROM
 //!
 //! IO Addresses:
 //!
@@ -34,7 +37,23 @@
 //! F035      PPU DMA Control
 //! F036-F037 PPU DMA Src Address
 //! F038-F039 PPU DMA Dst Address
+//! F03A      PPU BG Scroll-X
+//! F03B      PPU BG Scroll-Y
+//! F03C      PPU FG Scroll-X
+//! F03D      PPU FG Scroll-Y
+//! F03E-F03F PPU Line (current h-line being drawn)
 //! F040-F04F SND?
+//!
+//! PPU Memory Map:
+//!
+//! 0000-3FFF BG Map 16K (128x128 tiles)
+//! 4000-7FFF FG Map 16K (128x128 tiles)
+//! 8000-9FFF Tile Bank 0 (256 8x8 tiles, 2 pixels per byte)
+//! A000-BFFF Tile Bank 1 (256 8x8 tiles, 2 pixels per byte)
+//! C000-C0FF Sprite Attributes (128 sprites, 2 byte each)
+//! C100-C27F Sprite Positions (128 sprites, 3 bytes each, 20-bits for x and y)
+//! D000-D02F BG/FG Palette (16 24-bit colors)
+//! E000-D02F Sprite Palette (16 24-bit colors)
 use std::mem;
 
 use crate::{
