@@ -61,7 +61,7 @@
 //! C000-C0FF Sprite Attributes (128 sprites, 2 byte each)
 //! C100-C27F Sprite Positions (128 sprites, 3 bytes each, 20-bits for x and y)
 //! D000-D02F BG/FG Palette (16 24-bit colors)
-//! E000-D02F Sprite Palette (16 24-bit colors)
+//! D100-D12F Sprite Palette (16 24-bit colors)
 use std::mem;
 
 use crate::{
