@@ -21,12 +21,12 @@ impl Flags {
 #[derive(Debug, Default)]
 pub struct Cpu {
     a: u8,
+    b: u8,
     x: u8,
     y: u8,
     z: u8,
     p: u8,
-    bp: u8,
-    sp: [u8; 2],
+    s: [u8; 2],
     pc: [u8; 2],
 
     irq: bool,
@@ -40,21 +40,21 @@ impl Cpu {
 
     fn push<B: Bus>(&mut self, bus: &mut B, data: u8) {
         let addr = if (self.p & Flags::EXTEND_STACK_DISABLE) == 0 {
-            self.sp[1] = self.sp[1].wrapping_sub(1);
-            u16::from_le_bytes(self.sp)
+            self.s[1] = self.s[1].wrapping_sub(1);
+            u16::from_le_bytes(self.s)
         } else {
-            u16::from_le_bytes(self.sp).wrapping_sub(1)
+            u16::from_le_bytes(self.s).wrapping_sub(1)
         };
         bus.write(addr, data)
     }
 
     fn pull<B: Bus>(&mut self, bus: &mut B) -> u8 {
-        let addr = u16::from_le_bytes(self.sp);
+        let addr = u16::from_le_bytes(self.s);
         let data = bus.read(addr);
         if (self.p & Flags::EXTEND_STACK_DISABLE) == 0 {
-            self.sp[0] = self.sp[0].wrapping_add(1);
+            self.s[0] = self.s[0].wrapping_add(1);
         } else {
-            self.sp = addr.wrapping_add(1).to_le_bytes();
+            self.s = addr.wrapping_add(1).to_le_bytes();
         }
         data
     }
@@ -82,16 +82,16 @@ impl Cpu {
     // (BP,X)
     fn addr_bp_indirect_x<B: Bus>(&mut self, bus: &mut B) -> u16 {
         let ptr = self.fetch(bus).wrapping_add(self.x);
-        let lo = bus.read(u16::from_le_bytes([ptr, self.bp]));
-        let hi = bus.read(u16::from_le_bytes([ptr.wrapping_add(1), self.bp]));
+        let lo = bus.read(u16::from_le_bytes([ptr, self.b]));
+        let hi = bus.read(u16::from_le_bytes([ptr.wrapping_add(1), self.b]));
         u16::from_le_bytes([lo, hi])
     }
 
     // (BP),Y
     fn addr_bp_indirect_y<B: Bus>(&mut self, bus: &mut B) -> u16 {
         let ptr = self.fetch(bus);
-        let lo = bus.read(u16::from_le_bytes([ptr, self.bp]));
-        let hi = bus.read(u16::from_le_bytes([ptr.wrapping_add(1), self.bp]));
+        let lo = bus.read(u16::from_le_bytes([ptr, self.b]));
+        let hi = bus.read(u16::from_le_bytes([ptr.wrapping_add(1), self.b]));
         u16::from_le_bytes([lo, hi])
             .wrapping_add(self.y as u16) // good lord why carry?
             .wrapping_add(if (self.p & Flags::CARRY) != 0 { 1 } else { 0 })
@@ -100,26 +100,26 @@ impl Cpu {
     // (BP),Z
     fn addr_bp_indirect_z<B: Bus>(&mut self, bus: &mut B) -> u16 {
         let ptr = self.fetch(bus);
-        let lo = bus.read(u16::from_le_bytes([ptr, self.bp]));
-        let hi = bus.read(u16::from_le_bytes([ptr.wrapping_add(1), self.bp]));
+        let lo = bus.read(u16::from_le_bytes([ptr, self.b]));
+        let hi = bus.read(u16::from_le_bytes([ptr.wrapping_add(1), self.b]));
         u16::from_le_bytes([lo, hi]).wrapping_add(self.z as u16)
     }
 
     // BP,X
     fn addr_bp_x<B: Bus>(&mut self, bus: &mut B) -> u16 {
         let ptr = self.fetch(bus).wrapping_add(self.x);
-        u16::from_le_bytes([ptr, self.bp])
+        u16::from_le_bytes([ptr, self.b])
     }
 
     // BP,X
     fn addr_bp_y<B: Bus>(&mut self, bus: &mut B) -> u16 {
         let ptr = self.fetch(bus).wrapping_add(self.y);
-        u16::from_le_bytes([ptr, self.bp])
+        u16::from_le_bytes([ptr, self.b])
     }
 
     // BP
     fn addr_bp<B: Bus>(&mut self, bus: &mut B) -> u16 {
-        u16::from_le_bytes([self.fetch(bus), self.bp])
+        u16::from_le_bytes([self.fetch(bus), self.b])
     }
 
     // ABS
@@ -163,10 +163,10 @@ impl Cpu {
     fn addr_sp_indirect_y<B: Bus>(&mut self, bus: &mut B) -> u16 {
         let offset = self.fetch(bus);
         if (self.p & Flags::EXTEND_STACK_DISABLE) == 0 {
-            let lo = self.sp[0].wrapping_add(offset).wrapping_add(self.y);
-            u16::from_le_bytes([lo, self.sp[1]])
+            let lo = self.s[0].wrapping_add(offset).wrapping_add(self.y);
+            u16::from_le_bytes([lo, self.s[1]])
         } else {
-            u16::from_be_bytes(self.sp)
+            u16::from_be_bytes(self.s)
                 .wrapping_add(offset as u16)
                 .wrapping_add(self.y as u16)
         }
@@ -177,14 +177,14 @@ impl BusDevice for Cpu {
     fn reset<B: Bus>(&mut self, bus: &mut B) {
         let lo = bus.read(0xFFFC);
         let hi = bus.read(0xFFFD);
-        *self = Cpu {
+        *self = Self {
             a: 0,
+            b: 0,
             x: 0,
             y: 0,
             z: 0,
             p: Flags::INTERRUPT_DISABLE | Flags::EXTEND_STACK_DISABLE,
-            bp: 0,
-            sp: [0, 1], // stack is placed in page 1, for 6502 compat
+            s: [0, 1], // stack is placed in page 1, for 6502 compat
             pc: [lo, hi],
 
             irq: false,
@@ -192,11 +192,11 @@ impl BusDevice for Cpu {
         };
     }
 
-    fn irq<B: Bus>(&mut self, _bus: &mut B) {
+    fn irq(&mut self) {
         self.irq = true;
     }
 
-    fn nmi<B: Bus>(&mut self, _bus: &mut B) {
+    fn nmi(&mut self) {
         self.nmi = true;
     }
 
@@ -316,7 +316,7 @@ impl BusDevice for Cpu {
 
             // TSY
             0x0B => {
-                self.y = self.sp[1]; // transfer hi byte
+                self.y = self.s[1]; // transfer hi byte
                 self.set_flag(Flags::NEGATIVE, (self.y & 0x80) != 0);
                 self.set_flag(Flags::ZERO, self.y == 0);
             }
@@ -601,7 +601,7 @@ impl BusDevice for Cpu {
 
             // TYS
             0x2B => {
-                self.sp[1] = self.y; // transfer hi byte
+                self.s[1] = self.y; // transfer hi byte
             }
 
             // BIT ABS
@@ -1036,7 +1036,7 @@ impl BusDevice for Cpu {
 
             // TAB
             0x5B => {
-                self.bp = self.a;
+                self.b = self.a;
             }
 
             // AUG
@@ -1106,7 +1106,7 @@ impl BusDevice for Cpu {
                 // the argument is the location of the return address relative to
                 // top of stack
                 let offset = self.fetch(bus);
-                self.sp = u16::from_le_bytes(self.sp)
+                self.s = u16::from_le_bytes(self.s)
                     .wrapping_add(offset as u16)
                     .to_le_bytes();
                 let lo = self.pull(bus);
@@ -1371,7 +1371,7 @@ impl BusDevice for Cpu {
 
             // TBA
             0x7B => {
-                self.a = self.bp;
+                self.a = self.b;
                 self.set_flag(Flags::NEGATIVE, (self.a & 0x80) != 0);
                 self.set_flag(Flags::ZERO, self.a == 0);
             }
@@ -1610,7 +1610,7 @@ impl BusDevice for Cpu {
 
             // TXS
             0x9A => {
-                self.sp[0] = self.x;
+                self.s[0] = self.x;
             }
 
             // STX ABS,Y
@@ -1860,7 +1860,7 @@ impl BusDevice for Cpu {
 
             // TSX
             0xBA => {
-                self.x = self.sp[0]; // transfer lo byte
+                self.x = self.s[0]; // transfer lo byte
                 self.set_flag(Flags::NEGATIVE, (self.x & 0x80) != 0);
                 self.set_flag(Flags::ZERO, self.x == 0);
             }
