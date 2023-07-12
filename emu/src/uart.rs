@@ -79,7 +79,7 @@ impl<T: Read + Write> BusDevice for Uart<T> {
                         self.tx = Some(tx);
                     }
                     Err(e) => {
-                        todo!("Need to handle tx error: {e}");
+                        todo!("need to handle tx error: {e}");
                     }
                     _ => {
                         self.status |= StatusFlags::TX_DATA_REGISTER_EMPTY;
@@ -94,7 +94,7 @@ impl<T: Read + Write> BusDevice for Uart<T> {
                     // modem has nothing else to send us?
                     Ok(n) if n == 0 => {}
                     Err(e) => {
-                        todo!("Need to handle rx error: {e}");
+                        todo!("need to handle rx error: {e}");
                     }
                     _ => {
                         self.rx = Some(buf[0]);
@@ -103,6 +103,38 @@ impl<T: Read + Write> BusDevice for Uart<T> {
                 }
             } else {
             }
+        }
+    }
+
+    fn read(&mut self, addr: u16) -> u8 {
+        match addr {
+            0 => {
+                self.status &= !StatusFlags::RX_DATA_REGISTER_FULL;
+                self.rx.take().unwrap_or(0)
+            }
+            1 => {
+                // clear interrupt on status read.
+                // TODO: I think we clear the other bits too?
+                let status = self.status;
+                self.status &= !StatusFlags::INTERRUPT;
+                status
+            }
+            2 => self.command,
+            3 => self.control,
+            _ => unreachable!(),
+        }
+    }
+
+    fn write(&mut self, addr: u16, data: u8) {
+        match addr {
+            0 => {
+                self.status &= !StatusFlags::TX_DATA_REGISTER_EMPTY;
+                self.tx = Some(data);
+            }
+            1 => todo!("programmed reset not implemented"),
+            2 => self.command = data,
+            3 => self.control = data,
+            _ => unreachable!(),
         }
     }
 }

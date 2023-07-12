@@ -26,11 +26,12 @@ pub struct Cpu {
     y: u8,
     z: u8,
     p: u8,
-    s: [u8; 2],
+    sp: [u8; 2],
     pc: [u8; 2],
 
     irq: bool,
     nmi: bool,
+    stack_xfer_wait: bool, // delay interrupt handling during stack transfers
 }
 
 impl Cpu {
@@ -40,21 +41,21 @@ impl Cpu {
 
     fn push<B: Bus>(&mut self, bus: &mut B, data: u8) {
         let addr = if (self.p & Flags::EXTEND_STACK_DISABLE) == 0 {
-            self.s[1] = self.s[1].wrapping_sub(1);
-            u16::from_le_bytes(self.s)
+            self.sp[1] = self.sp[1].wrapping_sub(1);
+            u16::from_le_bytes(self.sp)
         } else {
-            u16::from_le_bytes(self.s).wrapping_sub(1)
+            u16::from_le_bytes(self.sp).wrapping_sub(1)
         };
         bus.write(addr, data)
     }
 
     fn pull<B: Bus>(&mut self, bus: &mut B) -> u8 {
-        let addr = u16::from_le_bytes(self.s);
+        let addr = u16::from_le_bytes(self.sp);
         let data = bus.read(addr);
         if (self.p & Flags::EXTEND_STACK_DISABLE) == 0 {
-            self.s[0] = self.s[0].wrapping_add(1);
+            self.sp[0] = self.sp[0].wrapping_add(1);
         } else {
-            self.s = addr.wrapping_add(1).to_le_bytes();
+            self.sp = addr.wrapping_add(1).to_le_bytes();
         }
         data
     }
@@ -111,7 +112,7 @@ impl Cpu {
         u16::from_le_bytes([ptr, self.b])
     }
 
-    // BP,X
+    // BP,Y
     fn addr_bp_y<B: Bus>(&mut self, bus: &mut B) -> u16 {
         let ptr = self.fetch(bus).wrapping_add(self.y);
         u16::from_le_bytes([ptr, self.b])
@@ -163,10 +164,10 @@ impl Cpu {
     fn addr_sp_indirect_y<B: Bus>(&mut self, bus: &mut B) -> u16 {
         let offset = self.fetch(bus);
         if (self.p & Flags::EXTEND_STACK_DISABLE) == 0 {
-            let lo = self.s[0].wrapping_add(offset).wrapping_add(self.y);
-            u16::from_le_bytes([lo, self.s[1]])
+            let lo = self.sp[0].wrapping_add(offset).wrapping_add(self.y);
+            u16::from_le_bytes([lo, self.sp[1]])
         } else {
-            u16::from_be_bytes(self.s)
+            u16::from_be_bytes(self.sp)
                 .wrapping_add(offset as u16)
                 .wrapping_add(self.y as u16)
         }
@@ -184,11 +185,12 @@ impl BusDevice for Cpu {
             y: 0,
             z: 0,
             p: Flags::INTERRUPT_DISABLE | Flags::EXTEND_STACK_DISABLE,
-            s: [0, 1], // stack is placed in page 1, for 6502 compat
+            sp: [0, 1], // stack is placed in page 1, for 6502 compat
             pc: [lo, hi],
 
             irq: false,
             nmi: false,
+            stack_xfer_wait: false,
         };
     }
 
@@ -201,40 +203,51 @@ impl BusDevice for Cpu {
     }
 
     fn tick<B: Bus>(&mut self, bus: &mut B) {
-        if self.nmi {
-            self.nmi = false;
-            let [lo, hi] = self.pc;
-            self.push(bus, hi);
-            self.push(bus, lo);
-            self.push(bus, self.p);
-            self.p |= Flags::INTERRUPT_DISABLE;
-            let lo = bus.read(0xFFFA);
-            let hi = bus.read(0xFFFB);
-            self.pc = [lo, hi];
-            return;
-        }
+        // TXS and TYS instructions require delaying interrupt handling
+        // for an extra tick because they need to be ran twice
+        // in succession in either order.
+        if !self.stack_xfer_wait {
+            if self.nmi {
+                self.nmi = false;
+                let [lo, hi] = self.pc;
+                self.push(bus, hi);
+                self.push(bus, lo);
+                self.push(bus, self.p);
+                self.p |= Flags::INTERRUPT_DISABLE;
+                let lo = bus.read(0xFFFA);
+                let hi = bus.read(0xFFFB);
+                self.pc = [lo, hi];
+                return;
+            }
 
-        if self.irq && ((self.p & Flags::INTERRUPT_DISABLE) == 0) {
-            self.irq = false;
-            let [lo, hi] = self.pc;
-            self.push(bus, hi);
-            self.push(bus, lo);
-            self.push(bus, self.p);
-            self.p |= Flags::INTERRUPT_DISABLE;
-            let lo = bus.read(0xFFFE);
-            let hi = bus.read(0xFFFF);
-            self.pc = [lo, hi];
-            return;
+            if self.irq && ((self.p & Flags::INTERRUPT_DISABLE) == 0) {
+                self.irq = false;
+                let [lo, hi] = self.pc;
+                self.push(bus, hi);
+                self.push(bus, lo);
+                self.push(bus, self.p);
+                self.p |= Flags::INTERRUPT_DISABLE;
+                let lo = bus.read(0xFFFE);
+                let hi = bus.read(0xFFFF);
+                self.pc = [lo, hi];
+                return;
+            }
         }
+        self.stack_xfer_wait = false;
 
         match self.fetch(bus) {
             // BRK
             0x00 => {
-                self.irq = true;
-                self.p |= Flags::BREAK;
-                // hop over the next byte
                 // the intent of the extra byte following BRK is to store the BRK reason?
-                self.pc = u16::from_le_bytes(self.pc).wrapping_add(1).to_le_bytes();
+                self.fetch(bus);
+                let [lo, hi] = self.pc;
+                self.push(bus, hi);
+                self.push(bus, lo);
+                self.push(bus, self.p);
+                self.p |= Flags::BREAK | Flags::INTERRUPT_DISABLE;
+                let lo = bus.read(0xFFFE);
+                let hi = bus.read(0xFFFF);
+                self.pc = [lo, hi];
             }
 
             // ORA (BP,X)
@@ -284,7 +297,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, data == 0);
             }
 
-            // RMB0 BP
+            // RMB 0,BP
             0x07 => {
                 let addr = self.addr_bp(bus);
                 let data = bus.read(addr);
@@ -316,7 +329,7 @@ impl BusDevice for Cpu {
 
             // TSY
             0x0B => {
-                self.y = self.s[1]; // transfer hi byte
+                self.y = self.sp[1]; // transfer hi byte
                 self.set_flag(Flags::NEGATIVE, (self.y & 0x80) != 0);
                 self.set_flag(Flags::ZERO, self.y == 0);
             }
@@ -349,7 +362,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, data == 0);
             }
 
-            // BBR0 BP
+            // BBR 0,BP
             0x0F => {
                 let addr = self.addr_bp(bus);
                 let branch = self.fetch(bus) as i8;
@@ -405,7 +418,7 @@ impl BusDevice for Cpu {
             0x14 => {
                 let addr = self.addr_bp(bus);
                 let data = bus.read(addr);
-                bus.write(addr, self.a & !data);
+                bus.write(addr, !self.a & data);
                 self.set_flag(Flags::ZERO, (self.a & data) == 0);
             }
 
@@ -429,7 +442,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, data == 0);
             }
 
-            // RMB1 BP
+            // RMB 1,BP
             0x17 => {
                 let addr = self.addr_bp(bus);
                 let data = bus.read(addr);
@@ -469,7 +482,7 @@ impl BusDevice for Cpu {
             0x1C => {
                 let addr = self.addr_abs(bus);
                 let data = bus.read(addr);
-                bus.write(addr, self.a & !data);
+                bus.write(addr, !self.a & data);
                 self.set_flag(Flags::ZERO, (self.a & data) == 0);
             }
 
@@ -493,7 +506,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, data == 0);
             }
 
-            // BBR1 BP
+            // BBR 1,BP
             0x1F => {
                 let addr = self.addr_bp(bus);
                 let branch = self.fetch(bus) as i8;
@@ -568,7 +581,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // RMB2 BP
+            // RMB 2,BP
             0x27 => {
                 let addr = self.addr_bp(bus);
                 let data = bus.read(addr);
@@ -601,7 +614,8 @@ impl BusDevice for Cpu {
 
             // TYS
             0x2B => {
-                self.s[1] = self.y; // transfer hi byte
+                self.sp[1] = self.y; // transfer hi byte
+                self.stack_xfer_wait = true;
             }
 
             // BIT ABS
@@ -634,7 +648,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // BBR2 BP
+            // BBR 2,BP
             0x2F => {
                 let addr = self.addr_bp(bus);
                 let branch = self.fetch(bus) as i8;
@@ -716,7 +730,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // RMB3 BP
+            // RMB 3,BP
             0x37 => {
                 let addr = self.addr_bp(bus);
                 let data = bus.read(addr);
@@ -782,7 +796,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // BBR3 BP
+            // BBR 3,BP
             0x3F => {
                 let addr = self.addr_bp(bus);
                 let branch = self.fetch(bus) as i8;
@@ -860,7 +874,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, data == 0);
             }
 
-            // RMB4 BP
+            // RMB 4,BP
             0x47 => {
                 let addr = self.addr_bp(bus);
                 let data = bus.read(addr);
@@ -923,7 +937,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, data == 0);
             }
 
-            // BBR4 BP
+            // BBR 4,BP
             0x4F => {
                 let addr = self.addr_bp(bus);
                 let branch = self.fetch(bus) as i8;
@@ -1007,7 +1021,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, data == 0);
             }
 
-            // RMB5 BP
+            // RMB 5,BP
             0x57 => {
                 let addr = self.addr_bp(bus);
                 let data = bus.read(addr);
@@ -1066,7 +1080,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, data == 0);
             }
 
-            // BBR5 BP
+            // BBR 5,BP
             0x5F => {
                 let addr = self.addr_bp(bus);
                 let branch = self.fetch(bus) as i8;
@@ -1106,7 +1120,7 @@ impl BusDevice for Cpu {
                 // the argument is the location of the return address relative to
                 // top of stack
                 let offset = self.fetch(bus);
-                self.s = u16::from_le_bytes(self.s)
+                self.sp = u16::from_le_bytes(self.sp)
                     .wrapping_add(offset as u16)
                     .to_le_bytes();
                 let lo = self.pull(bus);
@@ -1159,7 +1173,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // RMB6 BP
+            // RMB 6,BP
             0x67 => {
                 let addr = self.addr_bp(bus);
                 let data = bus.read(addr);
@@ -1237,7 +1251,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // BBR6 BP
+            // BBR 6,BP
             0x6F => {
                 let addr = self.addr_bp(bus);
                 let branch = self.fetch(bus) as i8;
@@ -1334,7 +1348,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // RMB7 BP
+            // RMB 7,BP
             0x77 => {
                 let addr = self.addr_bp(bus);
                 let data = bus.read(addr);
@@ -1409,7 +1423,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // BBR7 BP
+            // BBR 7,BP
             0x7F => {
                 let addr = self.addr_bp(bus);
                 let branch = self.fetch(bus) as i8;
@@ -1469,7 +1483,7 @@ impl BusDevice for Cpu {
                 bus.write(addr, self.x);
             }
 
-            // SMB0 BP
+            // SMB 0,BP
             0x87 => {
                 let addr = self.addr_bp(bus);
                 let data = bus.read(addr);
@@ -1523,7 +1537,7 @@ impl BusDevice for Cpu {
                 bus.write(addr, self.x);
             }
 
-            // BBS0 BP
+            // BBS 0,BP
             0x8F => {
                 let addr = self.addr_bp(bus);
                 let branch = self.fetch(bus) as i8;
@@ -1587,7 +1601,7 @@ impl BusDevice for Cpu {
                 bus.write(addr, self.a);
             }
 
-            // SMB1 BP
+            // SMB 1,BP
             0x97 => {
                 let addr = self.addr_bp(bus);
                 let data = bus.read(addr);
@@ -1610,7 +1624,8 @@ impl BusDevice for Cpu {
 
             // TXS
             0x9A => {
-                self.s[0] = self.x;
+                self.sp[0] = self.x;
+                self.stack_xfer_wait = true;
             }
 
             // STX ABS,Y
@@ -1637,7 +1652,7 @@ impl BusDevice for Cpu {
                 bus.write(addr, self.z);
             }
 
-            // BBS1 BP
+            // BBS 1,BP
             0x9F => {
                 let addr = self.addr_bp(bus);
                 let branch = self.fetch(bus) as i8;
@@ -1702,7 +1717,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, self.x == 0);
             }
 
-            // SMB2 BP
+            // SMB 2,BP
             0xA7 => {
                 let addr = self.addr_bp(bus);
                 let data = bus.read(addr);
@@ -1763,7 +1778,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, self.x == 0);
             }
 
-            // BBS2 BP
+            // BBS 2,BP
             0xAF => {
                 let addr = self.addr_bp(bus);
                 let branch = self.fetch(bus) as i8;
@@ -1837,7 +1852,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, self.x == 0);
             }
 
-            // SMB3 BP
+            // SMB 3,BP
             0xB7 => {
                 let addr = self.addr_bp(bus);
                 let data = bus.read(addr);
@@ -1860,7 +1875,7 @@ impl BusDevice for Cpu {
 
             // TSX
             0xBA => {
-                self.x = self.s[0]; // transfer lo byte
+                self.x = self.sp[0]; // transfer lo byte
                 self.set_flag(Flags::NEGATIVE, (self.x & 0x80) != 0);
                 self.set_flag(Flags::ZERO, self.x == 0);
             }
@@ -1897,7 +1912,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, self.x == 0);
             }
 
-            // BBS3 BP
+            // BBS 3,BP
             0xBF => {
                 let addr = self.addr_bp(bus);
                 let branch = self.fetch(bus) as i8;
@@ -1980,7 +1995,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // SMB4 BP
+            // SMB 4,BP
             0xC7 => {
                 let addr = self.addr_bp(bus);
                 let data = bus.read(addr);
@@ -2055,7 +2070,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // BBS4 BP
+            // BBS 4,BP
             0xCF => {
                 let addr = self.addr_bp(bus);
                 let branch = self.fetch(bus) as i8;
@@ -2139,7 +2154,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // SMB5 BP
+            // SMB 5,BP
             0xD7 => {
                 let addr = self.addr_bp(bus);
                 let data = bus.read(addr);
@@ -2202,7 +2217,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // BBS5 BP
+            // BBS 5,BP
             0xDF => {
                 let addr = self.addr_bp(bus);
                 let branch = self.fetch(bus) as i8;
@@ -2294,7 +2309,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // SMB6 BP
+            // SMB 6,BP
             0xE7 => {
                 let addr = self.addr_bp(bus);
                 let data = bus.read(addr);
@@ -2376,7 +2391,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // BBS6 BP
+            // BBS 6,BP
             0xEF => {
                 let addr = self.addr_bp(bus);
                 let branch = self.fetch(bus) as i8;
@@ -2473,7 +2488,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // SMB7 BP
+            // SMB 7,BP
             0xF7 => {
                 let addr = self.addr_bp(bus);
                 let data = bus.read(addr);
@@ -2549,7 +2564,7 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // BBS7 BP
+            // BBS 7,BP
             0xFF => {
                 let addr = self.addr_bp(bus);
                 let branch = self.fetch(bus) as i8;

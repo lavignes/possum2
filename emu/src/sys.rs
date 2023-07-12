@@ -19,17 +19,27 @@
 //!
 //! Memory Map:
 //!
-//! 0000-0FFF RAM0 (Fixed)
-//! 1000-3FFF RAM1
-//! 4000-7FFF RAM2
-//! 8000-BFFF RAM3
-//! C000-EFFF RAM4
+//! 0000-0FFF RAM0
+//! 1000-1FFF RAM1
+//! 2000-2FFF RAM2
+//! 3000-3FFF RAM3
+//! 4000-4FFF RAM4
+//! 5000-5FFF RAM5
+//! 6000-6FFF RAM6
+//! 7000-6FFF RAM7
+//! 8000-7FFF RAM8
+//! 9000-9FFF RAM9
+//! A000-AFFF RAMA
+//! B000-BFFF RAMB
+//! C000-CFFF RAMC
+//! D000-DFFF RAMD
+//! E000-EFFF RAME
 //! F000-F0FF IO
 //! F100-FFFF ROM
 //!
 //! IO Addresses:
 //!
-//! F000-F003 RAM Bank Select
+//! F000-F00E RAM Bank Select
 //! F010      SER0 Data
 //! F011      SER0 Status
 //! F012      SER0 Command
@@ -64,10 +74,7 @@
 //! F100-F27F Sprite Positions (128 sprites, 3 bytes each, 20-bits for x and y)
 //! F280-F2DF BG/FG Palettes (4 palettes of 8 24-bit colors)
 //! F2E0-F33F Sprite Palette (4 palettes of 8 24-bit colors)
-use std::{
-    io::{Read, Write},
-    mem,
-};
+use std::io::{Read, Write};
 
 use crate::{
     bus::{Bus, BusDevice},
@@ -75,77 +82,33 @@ use crate::{
     uart::Uart,
 };
 
-#[derive(Debug)]
-struct Mem(Vec<u8>);
-
-impl Mem {
-    const RAM0_SIZE: usize = 4096;
-    const SMALL_RAM_SIZE: usize = 12288;
-    const BIG_RAM_SIZE: usize = 16384;
-    const ROM_SIZE: usize = 3840;
-    const MAX_BANKS: usize = 256;
-
-    fn new() -> Self {
-        Self(vec![
-            0;
-            Self::RAM0_SIZE
-                + ((Self::SMALL_RAM_SIZE * Self::MAX_BANKS) * 2)
-                + ((Self::BIG_RAM_SIZE * Self::MAX_BANKS) * 2)
-                + Self::ROM_SIZE
-        ])
-    }
-
-    fn view(&mut self) -> MemView<'_> {
-        // Safety: No overlapping slices
-        let ram0 = unsafe { mem::transmute(self.0.as_mut_ptr()) };
-        let ram1 = unsafe { mem::transmute(self.0.as_mut_ptr().add(Self::RAM0_SIZE)) };
-        let ram2 = unsafe {
-            mem::transmute(
-                self.0
-                    .as_mut_ptr()
-                    .add(Self::RAM0_SIZE + (Self::SMALL_RAM_SIZE * Self::MAX_BANKS)),
-            )
-        };
-        let ram3 = unsafe {
-            mem::transmute(self.0.as_mut_ptr().add(
-                Self::RAM0_SIZE
-                    + (Self::SMALL_RAM_SIZE * Self::MAX_BANKS)
-                    + (Self::BIG_RAM_SIZE * Self::MAX_BANKS),
-            ))
-        };
-        let ram4 = unsafe {
-            mem::transmute(self.0.as_mut_ptr().add(
-                Self::RAM0_SIZE
-                    + (Self::SMALL_RAM_SIZE * Self::MAX_BANKS)
-                    + ((Self::BIG_RAM_SIZE * Self::MAX_BANKS) * 2),
-            ))
-        };
-        let rom = unsafe {
-            mem::transmute(self.0.as_mut_ptr().add(
-                Self::RAM0_SIZE
-                    + ((Self::SMALL_RAM_SIZE * Self::MAX_BANKS) * 2)
-                    + ((Self::BIG_RAM_SIZE * Self::MAX_BANKS) * 2),
-            ))
-        };
-        MemView {
-            ram0,
-            ram1,
-            ram2,
-            ram3,
-            ram4,
-            rom,
-        }
-    }
+struct Mem {
+    inner: Vec<u8>,
+    bank_select: [usize; 16], // we create 16 bank selects, but rom is static
 }
 
-#[derive(Debug)]
-struct MemView<'a> {
-    ram0: &'a mut [u8; Mem::RAM0_SIZE],
-    ram1: &'a mut [[u8; Mem::SMALL_RAM_SIZE]; Mem::MAX_BANKS],
-    ram2: &'a mut [[u8; Mem::BIG_RAM_SIZE]; Mem::MAX_BANKS],
-    ram3: &'a mut [[u8; Mem::BIG_RAM_SIZE]; Mem::MAX_BANKS],
-    ram4: &'a mut [[u8; Mem::SMALL_RAM_SIZE]; Mem::MAX_BANKS],
-    rom: &'a mut [u8; Mem::ROM_SIZE],
+impl Mem {
+    fn new() -> Self {
+        Self {
+            inner: vec![0; 65536 * 255],
+            bank_select: [0; 16],
+        }
+    }
+
+    fn read(&self, addr: u16) -> u8 {
+        // get the high nibble to determine which 4K "chapter" we are in
+        let chapter = ((addr & 0xF000) >> 12) as usize;
+        let base = chapter * (0x1000 + self.bank_select[chapter]);
+        let offset = (addr & 0x0FFF) as usize;
+        self.inner[base + offset]
+    }
+
+    fn write(&mut self, addr: u16, data: u8) {
+        let chapter = ((addr & 0xF000) >> 12) as usize;
+        let base = chapter * (0x1000 + self.bank_select[chapter]);
+        let offset = (addr & 0x0FFF) as usize;
+        self.inner[base + offset] = data;
+    }
 }
 
 pub struct System<S0, S1> {
@@ -153,7 +116,6 @@ pub struct System<S0, S1> {
     ser0: Uart<S0>,
     ser1: Uart<S1>,
 
-    banks: [usize; 4],
     mem: Mem,
 }
 
@@ -162,16 +124,20 @@ where
     S0: Read + Write,
     S1: Read + Write,
 {
-    pub fn new(ser0: S0, ser1: S1) -> Self {
+    pub fn new(rom: &[u8], ser0: S0, ser1: S1) -> Self {
         let cpu = Cpu::new();
         let ser0 = Uart::new(ser0);
         let ser1 = Uart::new(ser1);
-        let mem = Mem::new();
+        let mut mem = Mem::new();
+
+        for (i, data) in rom.iter().enumerate() {
+            mem.write((0xF100 + i) as u16, *data);
+        }
+
         Self {
             cpu,
             ser0,
             ser1,
-            banks: [0; 4],
             mem,
         }
     }
@@ -181,16 +147,9 @@ where
             cpu,
             ser0,
             ser1,
-            banks,
             mem,
         } = self;
-        let mem_view = mem.view();
-        cpu.reset(&mut CpuView {
-            ser0,
-            ser1,
-            banks,
-            mem_view,
-        });
+        cpu.reset(&mut CpuView { ser0, ser1, mem });
         let mut uart_view = UartView { cpu };
         ser0.reset(&mut uart_view);
         ser1.reset(&mut uart_view);
@@ -201,16 +160,9 @@ where
             cpu,
             ser0,
             ser1,
-            banks,
             mem,
         } = self;
-        let mem_view = mem.view();
-        cpu.tick(&mut CpuView {
-            ser0,
-            ser1,
-            banks,
-            mem_view,
-        });
+        cpu.tick(&mut CpuView { ser0, ser1, mem });
     }
 
     pub fn view(&mut self) -> (&'_ mut Cpu, CpuView<'_, S0, S1>) {
@@ -218,19 +170,9 @@ where
             cpu,
             ser0,
             ser1,
-            banks,
             mem,
         } = self;
-        let mem_view = mem.view();
-        (
-            cpu,
-            CpuView {
-                ser0,
-                ser1,
-                banks,
-                mem_view,
-            },
-        )
+        (cpu, CpuView { ser0, ser1, mem })
     }
 }
 
@@ -258,8 +200,7 @@ pub struct CpuView<'a, S0, S1> {
     ser0: &'a mut Uart<S0>,
     ser1: &'a mut Uart<S1>,
 
-    banks: &'a mut [usize; 4],
-    mem_view: MemView<'a>,
+    mem: &'a mut Mem,
 }
 
 impl<'a, S0, S1> Bus for CpuView<'a, S0, S1>
@@ -269,35 +210,25 @@ where
 {
     fn read(&mut self, addr: u16) -> u8 {
         match addr {
-            0x0000..=0x0FFF => self.mem_view.ram0[addr as usize],
-            0x1000..=0x3FFF => self.mem_view.ram1[self.banks[0]][(addr as usize) - 0x1000],
-            0x4000..=0x7FFF => self.mem_view.ram2[self.banks[1]][(addr as usize) - 0x4000],
-            0x8000..=0xBFFF => self.mem_view.ram3[self.banks[2]][(addr as usize) - 0x8000],
-            0xC000..=0xEFFF => self.mem_view.ram4[self.banks[3]][(addr as usize) - 0xC000],
-            0xF000..=0xF003 => self.banks[(addr as usize) - 0xF000] as u8,
+            0xF000..=0xF00E => self.mem.bank_select[(addr as usize) - 0xF000] as u8,
             0xF004..=0xF00F => 0,
             0xF010..=0xF013 => self.ser0.read(addr - 0xF010),
             0xF014..=0xF01F => 0,
             0xF020..=0xF023 => self.ser1.read(addr - 0xF020),
-            0xF024..=0xF0FF => todo!(),
-            0xF100..=0xFFFF => self.mem_view.rom[(addr as usize) - 0xF100],
+            0xF024..=0xF0FF => todo!("reading io address {addr:04X}"),
+            _ => self.mem.read(addr),
         }
     }
 
     fn write(&mut self, addr: u16, data: u8) {
         match addr {
-            0x0000..=0x0FFF => self.mem_view.ram0[addr as usize] = data,
-            0x1000..=0x3FFF => self.mem_view.ram1[self.banks[0]][(addr as usize) - 0x1000] = data,
-            0x4000..=0x7FFF => self.mem_view.ram2[self.banks[1]][(addr as usize) - 0x4000] = data,
-            0x8000..=0xBFFF => self.mem_view.ram3[self.banks[2]][(addr as usize) - 0x8000] = data,
-            0xC000..=0xEFFF => self.mem_view.ram4[self.banks[3]][(addr as usize) - 0xC000] = data,
-            0xF000..=0xF003 => self.banks[(addr as usize) - 0xF000] = data as usize,
+            0xF000..=0xF00E => self.mem.bank_select[(addr as usize) - 0xF000] = data as usize,
             0xF004..=0xF00F => {}
             0xF010..=0xF013 => self.ser0.write(addr - 0xF010, data),
             0xF014..=0xF01F => {}
             0xF020..=0xF023 => self.ser1.write(addr - 0xF020, data),
-            0xF024..=0xF0FF => todo!(),
-            0xF100..=0xFFFF => {}
+            0xF024..=0xF0FF => todo!("writing to io address {addr:04X}"),
+            _ => self.mem.write(addr, data),
         }
     }
 

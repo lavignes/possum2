@@ -1,7 +1,13 @@
-use std::io::{self, Read, Stdout, Write};
+use std::{
+    fs::File,
+    io::{self, Read, Stdout, Write},
+    path::PathBuf,
+};
 
+use clap::Parser;
 use sys::System;
 use termion::AsyncReader;
+use tracing::Level;
 
 mod bus;
 mod cpu;
@@ -56,10 +62,42 @@ impl Write for Tty {
     }
 }
 
-fn main() {
-    let mut sys = System::new(Tty::new(), NoopIo {});
+#[derive(Parser)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Path to rom file
+    rom: PathBuf,
+
+    /// One of `TRACE`, `DEBUG`, `INFO`, `WARN`, or `ERROR`
+    #[arg(short, long, default_value_t = Level::INFO)]
+    log_level: Level,
+}
+
+fn main() -> Result<(), ()> {
+    let args = Args::parse();
+
+    tracing_subscriber::fmt()
+        .with_max_level(args.log_level)
+        .init();
+
+    let mut rom = Vec::new();
+    File::open(&args.rom)
+        .map_err(|e| tracing::error!("failed to open ROM file: {e}"))?
+        .read_to_end(&mut rom)
+        .map_err(|e| tracing::error!("failed to read ROM file: {e}"))?;
+    if rom.len() != 0x0F00 {
+        tracing::error!(
+            "ROM file is {} bytes, but it must be exactly 3840 bytes in length!",
+            rom.len()
+        );
+        return Err(());
+    }
+
+    let mut sys = System::new(&rom, Tty::new(), NoopIo {});
     sys.reset();
     loop {
         sys.tick();
     }
+
+    Ok(())
 }
