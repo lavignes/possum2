@@ -12,17 +12,10 @@ kMain:
 	lda #$0B	; disable interrupts, enable tx/rx
 	sta SER0_CMD
 
-	lda #'@'
-	bsr ser0Tx
-
 .loop:
 	bsr ser0Rx
-	pha
-	lda #'@'
 	bsr ser0Tx
-	pla
-	bsr ser0Tx
-	jmp .loop
+	bra .loop
 
 ser0Tx:
 	pha
@@ -36,7 +29,7 @@ ser0Tx:
 
 ser0Rx:
 	lda SER0_STATUS
-	and #$08	; rx buffer full
+	and #$08	; wait for rx buffer full
 	beq ser0Rx
 	lda SER0_DATA
 	rts

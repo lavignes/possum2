@@ -80,6 +80,7 @@ fn main() -> Result<(), ()> {
 
     tracing_subscriber::fmt()
         .with_max_level(args.log_level)
+        .with_writer(io::stderr)
         .init();
 
     let mut rom = Vec::new();

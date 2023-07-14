@@ -2350,8 +2350,7 @@ impl BusDevice for Cpu {
                 let addr = self.addr_bp(bus);
                 let lo = bus.read(addr);
                 let hi = bus.read(addr.wrapping_add(1));
-                let (result, carry) = u16::from_le_bytes([lo, hi]).overflowing_shr(1);
-                let result = result | (((self.p & Flags::CARRY) as u16) << 15);
+                let (result, carry) = u16::from_le_bytes([lo, hi]).overflowing_shl(1);
                 let [lo, hi] = result.to_le_bytes();
                 bus.write(addr, lo);
                 bus.write(addr.wrapping_add(1), hi);

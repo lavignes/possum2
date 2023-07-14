@@ -136,14 +136,13 @@ impl<T: Read + Write> BusDevice for Uart<T> {
         match addr {
             0 => {
                 self.status &= !StatusFlags::TX_DATA_REGISTER_EMPTY;
-                tracing::debug!("wrote {}", data);
                 self.tx = Some(data);
             }
             1 => {
                 self.tx = None;
                 self.rx = None;
                 self.command = CommandFlags::RX_INTERRUPT_REQUEST_DISABLED;
-                self.status = 0;
+                self.status = StatusFlags::TX_DATA_REGISTER_EMPTY;
             }
             2 => self.command = data,
             3 => self.control = data,
