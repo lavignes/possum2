@@ -1,4 +1,4 @@
-//! 65CE02 Emulator
+//! CSG65CE02 Emulation
 
 use crate::bus::{Bus, BusDevice};
 
@@ -40,8 +40,8 @@ impl Cpu {
     }
 
     fn push<B: Bus>(&mut self, bus: &mut B, data: u8) {
-        let addr = if (self.p & Flags::EXTEND_STACK_DISABLE) == 0 {
-            self.sp[1] = self.sp[1].wrapping_sub(1);
+        let addr = if (self.p & Flags::EXTEND_STACK_DISABLE) != 0 {
+            self.sp[0] = self.sp[0].wrapping_sub(1);
             u16::from_le_bytes(self.sp)
         } else {
             u16::from_le_bytes(self.sp).wrapping_sub(1)
@@ -52,7 +52,7 @@ impl Cpu {
     fn pull<B: Bus>(&mut self, bus: &mut B) -> u8 {
         let addr = u16::from_le_bytes(self.sp);
         let data = bus.read(addr);
-        if (self.p & Flags::EXTEND_STACK_DISABLE) == 0 {
+        if (self.p & Flags::EXTEND_STACK_DISABLE) != 0 {
             self.sp[0] = self.sp[0].wrapping_add(1);
         } else {
             self.sp = addr.wrapping_add(1).to_le_bytes();
@@ -163,9 +163,10 @@ impl Cpu {
     // (d,SP),Y
     fn addr_sp_indirect_y<B: Bus>(&mut self, bus: &mut B) -> u16 {
         let offset = self.fetch(bus);
-        if (self.p & Flags::EXTEND_STACK_DISABLE) == 0 {
-            let lo = self.sp[0].wrapping_add(offset).wrapping_add(self.y);
-            u16::from_le_bytes([lo, self.sp[1]])
+        if (self.p & Flags::EXTEND_STACK_DISABLE) != 0 {
+            let [lo, hi] = self.sp;
+            let lo = lo.wrapping_add(offset).wrapping_add(self.y);
+            u16::from_le_bytes([lo, hi])
         } else {
             u16::from_be_bytes(self.sp)
                 .wrapping_add(offset as u16)

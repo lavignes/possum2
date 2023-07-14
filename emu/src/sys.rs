@@ -163,6 +163,9 @@ where
             mem,
         } = self;
         cpu.tick(&mut CpuView { ser0, ser1, mem });
+        let mut uart_view = UartView { cpu };
+        ser0.tick(&mut uart_view);
+        ser1.tick(&mut uart_view);
     }
 
     pub fn view(&mut self) -> (&'_ mut Cpu, CpuView<'_, S0, S1>) {

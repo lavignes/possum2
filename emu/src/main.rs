@@ -6,7 +6,10 @@ use std::{
 
 use clap::Parser;
 use sys::System;
-use termion::AsyncReader;
+use termion::{
+    raw::{IntoRawMode, RawTerminal},
+    AsyncReader,
+};
 use tracing::Level;
 
 mod bus;
@@ -33,16 +36,15 @@ impl Write for NoopIo {
 }
 
 struct Tty {
+    tx: RawTerminal<Stdout>,
     rx: AsyncReader,
-    tx: Stdout,
 }
 
 impl Tty {
     fn new() -> Self {
-        Self {
-            rx: termion::async_stdin(),
-            tx: io::stdout(),
-        }
+        let mut tx = io::stdout().into_raw_mode().unwrap();
+        let rx = termion::async_stdin();
+        Self { tx, rx }
     }
 }
 

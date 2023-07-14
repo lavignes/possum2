@@ -69,40 +69,47 @@ impl<T: Read + Write> BusDevice for Uart<T> {
     }
 
     fn tick<B: Bus>(&mut self, bus: &mut B) {
+        if (self.command & CommandFlags::DATA_TERMINAL_READY) == 0 {
+            return;
+        }
+
         let mut irq = false;
 
-        if (self.command & CommandFlags::DATA_TERMINAL_READY) != 0 {
-            if let Some(tx) = self.tx.take() {
-                match self.handle.write(&[tx]) {
-                    // no transmit happened. can this even happen?
-                    Ok(n) if n == 0 => {
-                        self.tx = Some(tx);
-                    }
-                    Err(e) => {
-                        todo!("need to handle tx error: {e}");
-                    }
-                    _ => {
-                        self.status |= StatusFlags::TX_DATA_REGISTER_EMPTY;
-                    }
+        if let Some(tx) = self.tx.take() {
+            match self.handle.write(&[tx]) {
+                // no transmit happened. can this even happen?
+                Ok(n) if n == 0 => {
+                    self.tx = Some(tx);
                 }
-            } else {
+                Err(e) => {
+                    todo!("need to handle tx error: {e}");
+                }
+                _ => {
+                    self.status |= StatusFlags::TX_DATA_REGISTER_EMPTY;
+                }
             }
+            self.handle.flush().unwrap();
+        } else {
+        }
 
-            if self.rx.is_none() {
-                let mut buf = [0];
-                match self.handle.read(&mut buf) {
-                    // modem has nothing else to send us?
-                    Ok(n) if n == 0 => {}
-                    Err(e) => {
-                        todo!("need to handle rx error: {e}");
-                    }
-                    _ => {
-                        self.rx = Some(buf[0]);
-                        self.status |= StatusFlags::RX_DATA_REGISTER_FULL;
-                    }
+        if self.rx.is_none() {
+            let mut buf = [0];
+            match self.handle.read(&mut buf) {
+                // modem has nothing else to send us?
+                Ok(n) if n == 0 => {}
+                Err(e) => {
+                    todo!("need to handle rx error: {e}");
                 }
-            } else {
+                _ => {
+                    self.rx = Some(buf[0]);
+                    self.status |= StatusFlags::RX_DATA_REGISTER_FULL;
+                }
             }
+        } else {
+        }
+
+        if irq {
+            bus.irq();
         }
     }
 
@@ -129,9 +136,15 @@ impl<T: Read + Write> BusDevice for Uart<T> {
         match addr {
             0 => {
                 self.status &= !StatusFlags::TX_DATA_REGISTER_EMPTY;
+                tracing::debug!("wrote {}", data);
                 self.tx = Some(data);
             }
-            1 => todo!("programmed reset not implemented"),
+            1 => {
+                self.tx = None;
+                self.rx = None;
+                self.command = CommandFlags::RX_INTERRUPT_REQUEST_DISABLED;
+                self.status = 0;
+            }
             2 => self.command = data,
             3 => self.control = data,
             _ => unreachable!(),
