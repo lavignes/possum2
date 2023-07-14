@@ -214,6 +214,7 @@ impl BusDevice for Cpu {
                 self.push(bus, hi);
                 self.push(bus, lo);
                 self.push(bus, self.p);
+                self.p &= !Flags::DECIMAL_MODE;
                 self.p |= Flags::INTERRUPT_DISABLE;
                 let lo = bus.read(0xFFFA);
                 let hi = bus.read(0xFFFB);
@@ -227,6 +228,7 @@ impl BusDevice for Cpu {
                 self.push(bus, hi);
                 self.push(bus, lo);
                 self.push(bus, self.p);
+                self.p &= !Flags::DECIMAL_MODE;
                 self.p |= Flags::INTERRUPT_DISABLE;
                 let lo = bus.read(0xFFFE);
                 let hi = bus.read(0xFFFF);
@@ -245,6 +247,7 @@ impl BusDevice for Cpu {
                 self.push(bus, hi);
                 self.push(bus, lo);
                 self.push(bus, self.p);
+                self.p &= !Flags::DECIMAL_MODE;
                 self.p |= Flags::BREAK | Flags::INTERRUPT_DISABLE;
                 let lo = bus.read(0xFFFE);
                 let hi = bus.read(0xFFFF);
