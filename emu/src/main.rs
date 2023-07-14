@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::{self, Read, Stdout, Write},
+    io::{self, Read, Seek, SeekFrom, Stdout, Write},
     path::PathBuf,
 };
 
@@ -33,6 +33,12 @@ impl Write for NoopIo {
 
     fn flush(&mut self) -> io::Result<()> {
         Ok(())
+    }
+}
+
+impl Seek for NoopIo {
+    fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
+        Ok(0)
     }
 }
 
@@ -97,7 +103,7 @@ fn main() -> Result<(), ()> {
         return Err(());
     }
 
-    let mut sys = System::new(&rom, Tty::new(), NoopIo {});
+    let mut sys = System::new(&rom, Tty::new(), NoopIo {}, NoopIo {}, NoopIo {});
     sys.reset();
     loop {
         sys.tick();

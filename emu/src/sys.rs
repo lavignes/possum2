@@ -81,11 +81,12 @@
 //! F100-F27F Sprite Positions (128 sprites, 3 bytes each, 20-bits for x and y)
 //! F280-F2DF BG/FG Palettes (4 palettes of 8 24-bit colors)
 //! F2E0-F33F Sprite Palette (4 palettes of 8 24-bit colors)
-use std::io::{Read, Write};
+use std::io::{Read, Seek, Write};
 
 use crate::{
     bus::{Bus, BusDevice},
     cpu::Cpu,
+    fdc::Fdc,
     uart::Uart,
 };
 
@@ -118,23 +119,29 @@ impl Mem {
     }
 }
 
-pub struct System<S0, S1> {
+pub struct System<S0, S1, F0, F1> {
     cpu: Cpu,
     ser0: Uart<S0>,
     ser1: Uart<S1>,
+    fdc0: Fdc<F0>,
+    fdc1: Fdc<F1>,
 
     mem: Mem,
 }
 
-impl<S0, S1> System<S0, S1>
+impl<S0, S1, F0, F1> System<S0, S1, F0, F1>
 where
     S0: Read + Write,
     S1: Read + Write,
+    F0: Read + Write + Seek,
+    F1: Read + Write + Seek,
 {
-    pub fn new(rom: &[u8], ser0: S0, ser1: S1) -> Self {
+    pub fn new(rom: &[u8], ser0: S0, ser1: S1, fdc0: F0, fdc1: F1) -> Self {
         let cpu = Cpu::new();
         let ser0 = Uart::new(ser0);
         let ser1 = Uart::new(ser1);
+        let fdc0 = Fdc::new(fdc0);
+        let fdc1 = Fdc::new(fdc1);
         let mut mem = Mem::new();
 
         for (i, data) in rom.iter().enumerate() {
@@ -145,6 +152,8 @@ where
             cpu,
             ser0,
             ser1,
+            fdc0,
+            fdc1,
             mem,
         }
     }
@@ -154,12 +163,22 @@ where
             cpu,
             ser0,
             ser1,
+            fdc0,
+            fdc1,
             mem,
         } = self;
-        cpu.reset(&mut CpuView { ser0, ser1, mem });
-        let mut uart_view = UartView { cpu };
-        ser0.reset(&mut uart_view);
-        ser1.reset(&mut uart_view);
+        cpu.reset(&mut CpuView {
+            ser0,
+            ser1,
+            fdc0,
+            fdc1,
+            mem,
+        });
+        let mut io_view = IoView { cpu };
+        ser0.reset(&mut io_view);
+        ser1.reset(&mut io_view);
+        fdc0.reset(&mut io_view);
+        fdc1.reset(&mut io_view);
     }
 
     pub fn tick(&mut self) {
@@ -167,30 +186,51 @@ where
             cpu,
             ser0,
             ser1,
+            fdc0,
+            fdc1,
             mem,
         } = self;
-        cpu.tick(&mut CpuView { ser0, ser1, mem });
-        let mut uart_view = UartView { cpu };
-        ser0.tick(&mut uart_view);
-        ser1.tick(&mut uart_view);
+        cpu.tick(&mut CpuView {
+            ser0,
+            ser1,
+            fdc0,
+            fdc1,
+            mem,
+        });
+        let mut io_view = IoView { cpu };
+        ser0.tick(&mut io_view);
+        ser1.tick(&mut io_view);
+        fdc0.tick(&mut io_view);
+        fdc1.tick(&mut io_view);
     }
 
-    pub fn view(&mut self) -> (&'_ mut Cpu, CpuView<'_, S0, S1>) {
+    pub fn view(&mut self) -> (&'_ mut Cpu, CpuView<'_, S0, S1, F0, F1>) {
         let System {
             cpu,
             ser0,
             ser1,
+            fdc0,
+            fdc1,
             mem,
         } = self;
-        (cpu, CpuView { ser0, ser1, mem })
+        (
+            cpu,
+            CpuView {
+                ser0,
+                ser1,
+                fdc0,
+                fdc1,
+                mem,
+            },
+        )
     }
 }
 
-struct UartView<'a> {
+struct IoView<'a> {
     cpu: &'a mut Cpu,
 }
 
-impl<'a> Bus for UartView<'a> {
+impl<'a> Bus for IoView<'a> {
     fn read(&mut self, _addr: u16) -> u8 {
         0
     }
@@ -206,19 +246,24 @@ impl<'a> Bus for UartView<'a> {
     }
 }
 
-pub struct CpuView<'a, S0, S1> {
+pub struct CpuView<'a, S0, S1, F0, F1> {
     ser0: &'a mut Uart<S0>,
     ser1: &'a mut Uart<S1>,
+    fdc0: &'a mut Fdc<F0>,
+    fdc1: &'a mut Fdc<F1>,
 
     mem: &'a mut Mem,
 }
 
-impl<'a, S0, S1> Bus for CpuView<'a, S0, S1>
+impl<'a, S0, S1, F0, F1> Bus for CpuView<'a, S0, S1, F0, F1>
 where
     S0: Read + Write,
     S1: Read + Write,
+    F0: Read + Write + Seek,
+    F1: Read + Write + Seek,
 {
     fn read(&mut self, addr: u16) -> u8 {
+        todo!("need to fix addresses because I udpated the table above");
         match addr {
             0xF000..=0xF00E => self.mem.bank_select[(addr as usize) - 0xF000] as u8,
             0xF004..=0xF00F => 0,
