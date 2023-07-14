@@ -1,8 +1,9 @@
 //! Overall System Emulation
 //!
 //! The Possum2 has a:
-//! * 65CE02 CPU
-//! * 2 6551 UARTs
+//! * CSG65CE02 CPU
+//! * 2 6551 Serial Ports
+//! * 2 FD179X Floppy Disk Controllers
 //! * NES/GBC-ish PPU with external VRAM and DMA
 //! * Banked RAM
 //!
@@ -44,23 +45,29 @@
 //! F011      SER0 Status
 //! F012      SER0 Command
 //! F013      SER0 Control
-//! F020      SER1 Data
-//! F021      SER1 Status
-//! F022      SER1 Command
-//! F023      SER1 Control
-//! F030      PPU Contol
-//! F031      PPU Status
-//! F032-F033 PPU Address
-//! F034      PPU Data
-//! F035      PPU DMA Control
-//! F036-F037 PPU DMA Address (src in RAM, dst is the PPU address)
-//! F038-F039 PPU DMA Length
-//! F03A      PPU BG Scroll-X
-//! F03B      PPU BG Scroll-Y
-//! F03C      PPU FG Scroll-X
-//! F03D      PPU FG Scroll-Y
-//! F03E-F03F PPU Line (current h-line being drawn)
-//! F040-F04F SND?
+//! F014      SER1 Data
+//! F015      SER1 Status
+//! F016      SER1 Command
+//! F017      SER1 Control
+//! F020      PPU Contol/Status (Reads return Status)
+//! F021      PPU Data
+//! F022      PPU Address (2 writes)
+//! F023      PPU DMA Control
+//! F024      PPU DMA Src (2 writes)
+//! F025      PPU DMA Dst (2 writes)
+//! F026      PPU DMA Length (2 writes)
+//! F027      PPU BG Scroll-X (2 writes)
+//! F028      PPU BG Scroll-Y (2 writes)
+//! F029      PPU FG Scroll-X (2 writes)
+//! F02A      PPU FG Scroll-Y (2 writes)
+//! F030      FDC0 Command/Status
+//! F031      FDC0 Track
+//! F032      FDC0 Sector
+//! F033      FDC0 Data
+//! F034      FDC1 Command/Status
+//! F035      FDC1 Track
+//! F036      FDC1 Sector
+//! F037      FDC1 Data
 //!
 //! PPU Memory Map:
 //!

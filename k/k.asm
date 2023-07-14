@@ -15,7 +15,7 @@ kMain:
 .loop:
 	bsr ser0Rx
 	bsr ser0Tx
-	bra .loop
+	bru .loop
 
 ser0Tx:
 	pha

@@ -14,6 +14,7 @@ use tracing::Level;
 
 mod bus;
 mod cpu;
+mod fdc;
 mod sys;
 mod uart;
 
