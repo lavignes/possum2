@@ -69,7 +69,7 @@
 //! F035      FDC1 Track
 //! F036      FDC1 Sector
 //! F037      FDC1 Data
-//! F0FF      Pr
+//! F0FF      Interrupt Latch
 //!
 //! PPU Memory Map:
 //!
