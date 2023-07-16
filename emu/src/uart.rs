@@ -44,6 +44,7 @@ pub struct Uart<T> {
     command: u8,
     tx: Option<u8>,
     rx: Option<u8>,
+    irq: bool,
 }
 
 impl<T> Uart<T> {
@@ -55,7 +56,12 @@ impl<T> Uart<T> {
             command: 0,
             tx: None,
             rx: None,
+            irq: false,
         }
+    }
+
+    pub fn irq(&self) -> bool {
+        (self.status & StatusFlags::INTERRUPT) != 0
     }
 }
 
@@ -66,14 +72,13 @@ impl<T: Read + Write> BusDevice for Uart<T> {
         self.command = 0;
         self.tx = None;
         self.rx = None;
+        self.irq = false;
     }
 
     fn tick<B: Bus>(&mut self, bus: &mut B) {
         if (self.command & CommandFlags::DATA_TERMINAL_READY) == 0 {
             return;
         }
-
-        let mut irq = false;
 
         if let Some(tx) = self.tx.take() {
             match self.handle.write(&[tx]) {
@@ -107,21 +112,20 @@ impl<T: Read + Write> BusDevice for Uart<T> {
             }
         } else {
         }
-
-        if irq {
-            bus.irq();
-        }
     }
 
     fn read(&mut self, addr: u16) -> u8 {
         match addr {
             0 => {
-                self.status &= !StatusFlags::RX_DATA_REGISTER_FULL;
+                // all error conditions are cleared on data read
+                self.status &= !(StatusFlags::RX_DATA_REGISTER_FULL
+                    | StatusFlags::PARITY_ERROR
+                    | StatusFlags::FRAMING_ERROR
+                    | StatusFlags::OVERRUN);
                 self.rx.take().unwrap_or(0)
             }
             1 => {
                 // clear interrupt on status read.
-                // TODO: I think we clear the other bits too?
                 let status = self.status;
                 self.status &= !StatusFlags::INTERRUPT;
                 status
@@ -142,6 +146,7 @@ impl<T: Read + Write> BusDevice for Uart<T> {
                 self.tx = None;
                 self.rx = None;
                 self.command = CommandFlags::RX_INTERRUPT_REQUEST_DISABLED;
+                // TODO: this isn't accurate. only overrun should clear on soft reset
                 self.status = StatusFlags::TX_DATA_REGISTER_EMPTY;
             }
             2 => self.command = data,

@@ -39,6 +39,14 @@ impl Cpu {
         Self::default()
     }
 
+    pub fn irq(&mut self) {
+        self.irq = true;
+    }
+
+    pub fn nmi(&mut self) {
+        self.nmi = true;
+    }
+
     fn push<B: Bus>(&mut self, bus: &mut B, data: u8) {
         let addr = if (self.p & Flags::EXTEND_STACK_DISABLE) != 0 {
             self.sp[0] = self.sp[0].wrapping_sub(1);
@@ -193,14 +201,6 @@ impl BusDevice for Cpu {
             nmi: false,
             stack_xfer_wait: false,
         };
-    }
-
-    fn irq(&mut self) {
-        self.irq = true;
-    }
-
-    fn nmi(&mut self) {
-        self.nmi = true;
     }
 
     fn tick<B: Bus>(&mut self, bus: &mut B) {

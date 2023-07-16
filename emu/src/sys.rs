@@ -2,8 +2,9 @@
 //!
 //! The Possum2 has a:
 //! * CSG65CE02 CPU
-//! * 2 6551 Serial Ports
+//! * 2 6551 UARTs
 //! * 2 FD179X Floppy Disk Controllers
+//! * Simple Interrupt Controller using 74148 and 74574
 //! * NES/GBC-ish PPU with external VRAM and DMA
 //! * Banked RAM
 //!
@@ -68,6 +69,7 @@
 //! F035      FDC1 Track
 //! F036      FDC1 Sector
 //! F037      FDC1 Data
+//! F0FF      Pr
 //!
 //! PPU Memory Map:
 //!
@@ -126,6 +128,7 @@ pub struct System<S0, S1, F0, F1> {
     fdc0: Fdc<F0>,
     fdc1: Fdc<F1>,
 
+    irq_latch: u8,
     mem: Mem,
 }
 
@@ -154,6 +157,7 @@ where
             ser1,
             fdc0,
             fdc1,
+            irq_latch: 0,
             mem,
         }
     }
@@ -165,6 +169,7 @@ where
             ser1,
             fdc0,
             fdc1,
+            irq_latch,
             mem,
         } = self;
         cpu.reset(&mut CpuView {
@@ -172,6 +177,7 @@ where
             ser1,
             fdc0,
             fdc1,
+            irq_latch,
             mem,
         });
         let mut io_view = IoView { cpu };
@@ -179,6 +185,7 @@ where
         ser1.reset(&mut io_view);
         fdc0.reset(&mut io_view);
         fdc1.reset(&mut io_view);
+        *irq_latch = 0;
     }
 
     pub fn tick(&mut self) {
@@ -188,6 +195,7 @@ where
             ser1,
             fdc0,
             fdc1,
+            irq_latch,
             mem,
         } = self;
         cpu.tick(&mut CpuView {
@@ -195,6 +203,7 @@ where
             ser1,
             fdc0,
             fdc1,
+            irq_latch,
             mem,
         });
         let mut io_view = IoView { cpu };
@@ -202,6 +211,25 @@ where
         ser1.tick(&mut io_view);
         fdc0.tick(&mut io_view);
         fdc1.tick(&mut io_view);
+
+        // update IRQ latch
+        if fdc0.drq() {
+            *irq_latch = 1 << 1;
+        } else if fdc1.drq() {
+            *irq_latch = 2 << 1;
+        } else if fdc0.irq() {
+            *irq_latch = 3 << 1;
+        } else if fdc1.irq() {
+            *irq_latch = 4 << 1;
+        } else if ser0.irq() {
+            *irq_latch = 5 << 1;
+        } else if ser1.irq() {
+            *irq_latch = 6 << 1;
+        }
+        // tie all IRQs to CPU
+        if ser0.irq() || ser1.irq() || fdc0.irq() || fdc0.drq() || fdc1.irq() || fdc1.drq() {
+            cpu.irq();
+        }
     }
 
     pub fn view(&mut self) -> (&'_ mut Cpu, CpuView<'_, S0, S1, F0, F1>) {
@@ -211,6 +239,7 @@ where
             ser1,
             fdc0,
             fdc1,
+            irq_latch,
             mem,
         } = self;
         (
@@ -220,6 +249,7 @@ where
                 ser1,
                 fdc0,
                 fdc1,
+                irq_latch,
                 mem,
             },
         )
@@ -236,14 +266,6 @@ impl<'a> Bus for IoView<'a> {
     }
 
     fn write(&mut self, _addr: u16, _data: u8) {}
-
-    fn irq(&mut self) {
-        self.cpu.irq();
-    }
-
-    fn nmi(&mut self) {
-        self.cpu.nmi();
-    }
 }
 
 pub struct CpuView<'a, S0, S1, F0, F1> {
@@ -252,6 +274,7 @@ pub struct CpuView<'a, S0, S1, F0, F1> {
     fdc0: &'a mut Fdc<F0>,
     fdc1: &'a mut Fdc<F1>,
 
+    irq_latch: &'a mut u8,
     mem: &'a mut Mem,
 }
 
@@ -263,14 +286,20 @@ where
     F1: Read + Write + Seek,
 {
     fn read(&mut self, addr: u16) -> u8 {
-        todo!("need to fix addresses because I udpated the table above");
         match addr {
             0xF000..=0xF00E => self.mem.bank_select[(addr as usize) - 0xF000] as u8,
             0xF004..=0xF00F => 0,
             0xF010..=0xF013 => self.ser0.read(addr - 0xF010),
-            0xF014..=0xF01F => 0,
-            0xF020..=0xF023 => self.ser1.read(addr - 0xF020),
-            0xF024..=0xF0FF => todo!("reading io address {addr:04X}"),
+            0xF014..=0xF017 => self.ser1.read(addr - 0xF014),
+            0xF024..=0xF029 => todo!("reading io address {addr:04X}"),
+            0xF030..=0xF033 => self.fdc0.read(addr - 0xF030),
+            0xF034..=0xF037 => self.fdc1.read(addr - 0xF034),
+            0xF038..=0xF0FE => todo!("reading io address {addr:04X}"),
+            0xF0FF => {
+                let irq = *self.irq_latch;
+                *self.irq_latch = 0;
+                irq
+            }
             _ => self.mem.read(addr),
         }
     }
@@ -280,14 +309,13 @@ where
             0xF000..=0xF00E => self.mem.bank_select[(addr as usize) - 0xF000] = data as usize,
             0xF004..=0xF00F => {}
             0xF010..=0xF013 => self.ser0.write(addr - 0xF010, data),
-            0xF014..=0xF01F => {}
-            0xF020..=0xF023 => self.ser1.write(addr - 0xF020, data),
-            0xF024..=0xF0FF => todo!("writing to io address {addr:04X}"),
+            0xF014..=0xF017 => self.ser1.write(addr - 0xF014, data),
+            0xF024..=0xF029 => todo!("writing to io address {addr:04X}"),
+            0xF030..=0xF033 => self.fdc0.write(addr - 0xF030, data),
+            0xF034..=0xF037 => self.fdc1.write(addr - 0xF034, data),
+            0xF038..=0xF0FE => todo!("writing to io address {addr:04X}"),
+            0xF0FF => {}
             _ => self.mem.write(addr, data),
         }
     }
-
-    fn irq(&mut self) {}
-
-    fn nmi(&mut self) {}
 }
