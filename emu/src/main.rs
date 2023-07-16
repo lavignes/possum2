@@ -151,7 +151,7 @@ fn main() -> Result<(), ()> {
         .map_err(|e| tracing::error!("failed to read ROM file: {e}"))?;
     if rom.len() != 0x0F00 {
         tracing::error!(
-            "ROM file is {} bytes, but it must be exactly 3840 bytes in length!",
+            "ROM file is {} bytes, but it must be exactly 3840 bytes (3.75KiB) in length!",
             rom.len()
         );
         return Err(());
@@ -164,6 +164,13 @@ fn main() -> Result<(), ()> {
         .map_err(|e| tracing::error!("failed to open FD0 file: {e}"))?;
     let fd0 = (unsafe { MmapMut::map_mut(&fd0) })
         .map_err(|e| tracing::error!("failed to map FD0 file: {e}"))?;
+    if fd0.len() != 0xB4000 {
+        tracing::error!(
+            "FD0 file is {} bytes, but it must be exactly 737280 bytes (720KiB) in length!",
+            fd0.len()
+        );
+        return Err(());
+    }
     let fd0 = MemMap {
         inner: fd0,
         offset: 0,
