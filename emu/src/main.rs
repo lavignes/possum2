@@ -12,7 +12,7 @@ use clap::Parser;
 use cpu::Cpu;
 use memmap2::MmapMut;
 use signal_hook::{consts, flag};
-use sys::System;
+use sys::{Mem, System};
 use termion::{
     raw::{IntoRawMode, RawTerminal},
     AsyncReader,
@@ -226,10 +226,14 @@ fn main() -> Result<(), ()> {
                         "s" | "n" => sys.tick(), // single step
                         "r" => print_cpu_regs(sys.cpu()),
                         "R" => print_cpu_regs_base10(sys.cpu()),
-                        "b" => add_breakpoint(sys.cpu(), &mut breakpoints, parts.get(1).cloned()),
+                        "RR" => print_cpu_regs_signed_base10(sys.cpu()),
+                        "b" => add_breakpoint(sys.cpu(), &mut breakpoints, parts.get(1).copied()),
                         "B" => {
-                            remove_breakpoint(sys.cpu(), &mut breakpoints, parts.get(1).cloned())
+                            remove_breakpoint(sys.cpu(), &mut breakpoints, parts.get(1).copied())
                         }
+                        "x" => examine(sys.mem(), sys.cpu(), parts.get(1).copied()),
+                        "X" => examine_base10(sys.mem(), sys.cpu(), parts.get(1).copied()),
+                        "XX" => examine_signed_base10(sys.mem(), sys.cpu(), parts.get(1).copied()),
                         "?" => print_help(),
                         _ => println!("unknown command: `{}`. type `?` for help", parts[0]),
                     }
@@ -246,52 +250,151 @@ fn main() -> Result<(), ()> {
     Ok(())
 }
 
-fn add_breakpoint(cpu: &Cpu, breakpoints: &mut Vec<u16>, arg: Option<&str>) {
-    let arg = if let Some(arg) = arg {
-        arg
+fn examine(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
+    let start = if let Some(arg) = start {
+        match u16::from_str_radix(arg, 16) {
+            Ok(addr) => addr,
+            Err(e) => {
+                println!("error parsing start address: {e}");
+                return;
+            }
+        }
     } else {
-        let addr = cpu.pc();
-        if breakpoints.contains(&addr) {
-            println!("breakpoint already exists");
-        } else {
-            breakpoints.push(addr);
-            println!("breakpoint added at {addr:04X}");
-        }
-        return;
+        cpu.pc()
     };
-    match u16::from_str_radix(arg, 16) {
-        Ok(addr) if !breakpoints.contains(&addr) => {
-            breakpoints.push(addr);
-            println!("breakpoint added at {addr:04X}");
+    let true_start = start & 0xFFF0; // start printing from 16-byte address
+    let true_end = (((start as u32) + ((15 - (start & 0x000F)) as u32)) & 0xFFFF) as u16;
+    print!("{true_start:04X}  ");
+    for _ in true_start..start {
+        print!("__ ");
+    }
+    for addr in start..=true_end {
+        print!("{:02X} ", mem.read(addr));
+    }
+    print!(" |");
+    for _ in true_start..start {
+        print!("_");
+    }
+    for addr in start..=true_end {
+        let c = mem.read(addr);
+        if c.is_ascii_graphic() {
+            print!("{}", c as char);
+        } else {
+            print!(".");
         }
-        Ok(_) => println!("breakpoint already exists"),
-        Err(e) => println!("error parsing address: {e}"),
+    }
+    println!("|");
+}
+
+fn examine_base10(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
+    let start = if let Some(arg) = start {
+        match u16::from_str_radix(arg, 16) {
+            Ok(addr) => addr,
+            Err(e) => {
+                println!("error parsing start address: {e}");
+                return;
+            }
+        }
+    } else {
+        cpu.pc()
+    };
+    let true_start = start & 0xFFF0; // start printing from 16-byte address
+    let true_end = (((start as u32) + ((15 - (start & 0x000F)) as u32)) & 0xFFFF) as u16;
+    print!("{true_start:05}  ");
+    for _ in true_start..start {
+        print!("___ ");
+    }
+    for addr in start..=true_end {
+        print!("{:03} ", mem.read(addr));
+    }
+    print!(" |");
+    for _ in true_start..start {
+        print!("_");
+    }
+    for addr in start..=true_end {
+        let c = mem.read(addr);
+        if c.is_ascii_graphic() {
+            print!("{}", c as char);
+        } else {
+            print!(".");
+        }
+    }
+    println!("|");
+}
+
+fn examine_signed_base10(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
+    let start = if let Some(arg) = start {
+        match u16::from_str_radix(arg, 16) {
+            Ok(addr) => addr,
+            Err(e) => {
+                println!("error parsing start address: {e}");
+                return;
+            }
+        }
+    } else {
+        cpu.pc()
+    };
+    let true_start = start & 0xFFF0; // start printing from 16-byte address
+    let true_end = (((start as u32) + ((15 - (start & 0x000F)) as u32)) & 0xFFFF) as u16;
+    print!("{true_start:05}  ");
+    for _ in true_start..start {
+        print!("____ ");
+    }
+    for addr in start..=true_end {
+        print!("{:+04} ", mem.read(addr) as i8);
+    }
+    print!(" |");
+    for _ in true_start..start {
+        print!("_");
+    }
+    for addr in start..=true_end {
+        let c = mem.read(addr);
+        if c.is_ascii_graphic() {
+            print!("{}", c as char);
+        } else {
+            print!(".");
+        }
+    }
+    println!("|");
+}
+
+fn add_breakpoint(cpu: &Cpu, breakpoints: &mut Vec<u16>, arg: Option<&str>) {
+    let addr = if let Some(arg) = arg {
+        match u16::from_str_radix(arg, 16) {
+            Ok(addr) => addr,
+            Err(e) => {
+                println!("error parsing address: {e}");
+                return;
+            }
+        }
+    } else {
+        cpu.pc()
+    };
+    if breakpoints.contains(&addr) {
+        println!("breakpoint already exists");
+    } else {
+        breakpoints.push(addr);
+        println!("breakpoint added at {addr:04X}");
     }
 }
 
 fn remove_breakpoint(cpu: &Cpu, breakpoints: &mut Vec<u16>, arg: Option<&str>) {
-    let arg = if let Some(arg) = arg {
-        arg
-    } else {
-        let addr = cpu.pc();
-        if let Some(index) = breakpoints.iter().position(|&a| a == addr) {
-            breakpoints.remove(index);
-            println!("breakpoint removed at {addr:04X}");
-        } else {
-            println!("breakpoint does not exist");
-        }
-        return;
-    };
-    match u16::from_str_radix(arg, 16) {
-        Ok(addr) => {
-            if let Some(index) = breakpoints.iter().position(|&a| a == addr) {
-                breakpoints.remove(index);
-                println!("breakpoint removed at {addr:04X}");
-            } else {
-                println!("breakpoint does not exist");
+    let addr = if let Some(arg) = arg {
+        match u16::from_str_radix(arg, 16) {
+            Ok(addr) => addr,
+            Err(e) => {
+                println!("error parsing address: {e}");
+                return;
             }
         }
-        Err(e) => println!("error parsing address: {e}"),
+    } else {
+        cpu.pc()
+    };
+    if let Some(index) = breakpoints.iter().position(|&a| a == addr) {
+        breakpoints.remove(index);
+        println!("breakpoint removed at {addr:04X}");
+    } else {
+        println!("breakpoint does not exist");
     }
 }
 
@@ -302,8 +405,12 @@ fn print_help() {
     println!("`s` or `n`: single step cpu");
     println!("`r`: print cpu registers");
     println!("`R`: print cpu registers (base 10)");
+    println!("`RR`: print cpu registers (signed base 10)");
     println!("`b [addr]`: add breakpoint");
     println!("`B [addr]`: delete breakpoint");
+    println!("`x [start]`: examine memory");
+    println!("`X [start]`: examine memory (base 10)");
+    println!("`XX [start]`: examine memory (signed base 10)");
     println!("`?`: show this help info");
 }
 
@@ -347,6 +454,33 @@ fn print_cpu_regs_base10(cpu: &Cpu) {
     );
     let p = cpu.p();
     print!("P={:03} [", p);
+    #[rustfmt::skip]
+    {
+        print!("{}", if (p & Flags::NEGATIVE) == 0 { "-" } else { "N" });
+        print!("{}", if (p & Flags::OVERFLOW) == 0 { "-" } else { "V" });
+        print!("{}", if (p & Flags::EXTEND_STACK_DISABLE) == 0 { "-" } else { "E" });
+        print!("{}", if (p & Flags::BREAK) == 0 { "-" } else { "B" });
+        print!("{}", if (p & Flags::DECIMAL_MODE) == 0 { "-" } else { "D" });
+        print!("{}", if (p & Flags::INTERRUPT_DISABLE) == 0 { "-" } else { "I" });
+        print!("{}", if (p & Flags::ZERO) == 0 { "-" } else { "Z" });
+        print!("{}", if (p & Flags::CARRY) == 0 { "-" } else { "C" });
+    };
+    println!("]");
+}
+
+fn print_cpu_regs_signed_base10(cpu: &Cpu) {
+    print!(
+        "A={:+04} B={:+04} X={:+04} Y={:+04} Z={:+04} PC={:+06} SP={:+06} ",
+        cpu.a() as i8,
+        cpu.b() as i8,
+        cpu.x() as i8,
+        cpu.y() as i8,
+        cpu.z() as i8,
+        cpu.pc() as i16,
+        cpu.sp() as i16
+    );
+    let p = cpu.p();
+    print!("P={:+04} [", p as i8);
     #[rustfmt::skip]
     {
         print!("{}", if (p & Flags::NEGATIVE) == 0 { "-" } else { "N" });

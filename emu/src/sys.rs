@@ -92,7 +92,7 @@ use crate::{
     uart::Uart,
 };
 
-struct Mem {
+pub struct Mem {
     inner: Vec<u8>,
     bank_select: [usize; 16], // we create 16 bank selects, but rom is static
 }
@@ -105,7 +105,7 @@ impl Mem {
         }
     }
 
-    fn read(&self, addr: u16) -> u8 {
+    pub fn read(&self, addr: u16) -> u8 {
         // get the high nibble to determine which 4K "chapter" we are in
         let chapter = ((addr & 0xF000) >> 12) as usize;
         let base = chapter * (0x1000 + self.bank_select[chapter]);
@@ -238,6 +238,10 @@ where
 
     pub fn cpu(&self) -> &Cpu {
         &self.cpu
+    }
+
+    pub fn mem(&self) -> &Mem {
+        &self.mem
     }
 }
 
