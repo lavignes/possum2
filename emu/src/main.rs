@@ -2,16 +2,24 @@ use std::{
     fs::File,
     io::{self, Read, Seek, SeekFrom, Stdout, Write},
     path::PathBuf,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 
 use clap::Parser;
+use cpu::Cpu;
 use memmap2::MmapMut;
+use signal_hook::{consts, flag};
 use sys::System;
 use termion::{
     raw::{IntoRawMode, RawTerminal},
     AsyncReader,
 };
 use tracing::Level;
+
+use crate::cpu::Flags;
 
 mod bus;
 mod cpu;
@@ -71,7 +79,7 @@ impl Write for MemMap {
 impl Seek for MemMap {
     fn seek(&mut self, pos: SeekFrom) -> io::Result<u64> {
         match pos {
-            SeekFrom::End(offset) => {
+            SeekFrom::End(_) => {
                 self.offset = self.inner.len();
             }
             SeekFrom::Start(offset) => {
@@ -176,11 +184,179 @@ fn main() -> Result<(), ()> {
         offset: 0,
     };
 
+    let debug_mode = Arc::new(AtomicBool::new(false));
+    flag::register(consts::SIGUSR1, debug_mode.clone())
+        .map_err(|e| {
+            tracing::warn!("external debugger unavailable: failed to install SIGUSR1 handler: {e}")
+        })
+        .ok();
+
+    let mut breakpoints = Vec::new();
     let mut sys = System::new(&rom, Tty::new(), NoopIo {}, fd0, NoopIo {});
     sys.reset();
-    loop {
+
+    'emu: loop {
+        if breakpoints.contains(&sys.cpu().pc()) {
+            debug_mode.store(true, Ordering::Relaxed);
+        }
+        if debug_mode.load(Ordering::Relaxed) {
+            sys.ser0_mut().handle_mut().tx.suspend_raw_mode().unwrap();
+            loop {
+                print!("dbg> ");
+                sys.ser0_mut().handle_mut().tx.flush().unwrap();
+                let mut line = Vec::new();
+                // kind of jank, but reads are async, so we busy-wait
+                loop {
+                    let mut buf = [0];
+                    if sys.ser0_mut().handle_mut().rx.read(&mut buf).unwrap() != 1 {
+                        continue;
+                    }
+                    if buf[0] == 0x0A {
+                        break;
+                    }
+                    line.push(buf[0]);
+                }
+
+                let line = String::from_utf8(line).unwrap();
+                let parts = line.split_whitespace().collect::<Vec<&str>>();
+                if !parts.is_empty() {
+                    match parts[0] {
+                        "q" => break,            // quit debugger
+                        "Q" => break 'emu,       // quit emulator
+                        "s" | "n" => sys.tick(), // single step
+                        "r" => print_cpu_regs(sys.cpu()),
+                        "R" => print_cpu_regs_base10(sys.cpu()),
+                        "b" => add_breakpoint(sys.cpu(), &mut breakpoints, parts.get(1).cloned()),
+                        "B" => {
+                            remove_breakpoint(sys.cpu(), &mut breakpoints, parts.get(1).cloned())
+                        }
+                        "?" => print_help(),
+                        _ => println!("unknown command: `{}`. type `?` for help", parts[0]),
+                    }
+                }
+            }
+            // restore raw tty
+            sys.ser0_mut().handle_mut().tx.activate_raw_mode().unwrap();
+            debug_mode.store(false, Ordering::Relaxed);
+        }
+
         sys.tick();
     }
 
     Ok(())
+}
+
+fn add_breakpoint(cpu: &Cpu, breakpoints: &mut Vec<u16>, arg: Option<&str>) {
+    let arg = if let Some(arg) = arg {
+        arg
+    } else {
+        let addr = cpu.pc();
+        if breakpoints.contains(&addr) {
+            println!("breakpoint already exists");
+        } else {
+            breakpoints.push(addr);
+            println!("breakpoint added at {addr:04X}");
+        }
+        return;
+    };
+    match u16::from_str_radix(arg, 16) {
+        Ok(addr) if !breakpoints.contains(&addr) => {
+            breakpoints.push(addr);
+            println!("breakpoint added at {addr:04X}");
+        }
+        Ok(_) => println!("breakpoint already exists"),
+        Err(e) => println!("error parsing address: {e}"),
+    }
+}
+
+fn remove_breakpoint(cpu: &Cpu, breakpoints: &mut Vec<u16>, arg: Option<&str>) {
+    let arg = if let Some(arg) = arg {
+        arg
+    } else {
+        let addr = cpu.pc();
+        if let Some(index) = breakpoints.iter().position(|&a| a == addr) {
+            breakpoints.remove(index);
+            println!("breakpoint removed at {addr:04X}");
+        } else {
+            println!("breakpoint does not exist");
+        }
+        return;
+    };
+    match u16::from_str_radix(arg, 16) {
+        Ok(addr) => {
+            if let Some(index) = breakpoints.iter().position(|&a| a == addr) {
+                breakpoints.remove(index);
+                println!("breakpoint removed at {addr:04X}");
+            } else {
+                println!("breakpoint does not exist");
+            }
+        }
+        Err(e) => println!("error parsing address: {e}"),
+    }
+}
+
+fn print_help() {
+    println!("debugger commands:");
+    println!("`q`: quit debugger, continuing emulator");
+    println!("`Q`: quit emulator");
+    println!("`s` or `n`: single step cpu");
+    println!("`r`: print cpu registers");
+    println!("`R`: print cpu registers (base 10)");
+    println!("`b [addr]`: add breakpoint");
+    println!("`B [addr]`: delete breakpoint");
+    println!("`?`: show this help info");
+}
+
+fn print_cpu_regs(cpu: &Cpu) {
+    print!(
+        "A={:02X} B={:02X} X={:02X} Y={:02X} Z={:02X} PC={:04X} SP={:04X} ",
+        cpu.a(),
+        cpu.b(),
+        cpu.x(),
+        cpu.y(),
+        cpu.z(),
+        cpu.pc(),
+        cpu.sp()
+    );
+    let p = cpu.p();
+    print!("P={:02X} [", p);
+    #[rustfmt::skip]
+    {
+        print!("{}", if (p & Flags::NEGATIVE) == 0 { "-" } else { "N" });
+        print!("{}", if (p & Flags::OVERFLOW) == 0 { "-" } else { "V" });
+        print!("{}", if (p & Flags::EXTEND_STACK_DISABLE) == 0 { "-" } else { "E" });
+        print!("{}", if (p & Flags::BREAK) == 0 { "-" } else { "B" });
+        print!("{}", if (p & Flags::DECIMAL_MODE) == 0 { "-" } else { "D" });
+        print!("{}", if (p & Flags::INTERRUPT_DISABLE) == 0 { "-" } else { "I" });
+        print!("{}", if (p & Flags::ZERO) == 0 { "-" } else { "Z" });
+        print!("{}", if (p & Flags::CARRY) == 0 { "-" } else { "C" });
+    };
+    println!("]");
+}
+
+fn print_cpu_regs_base10(cpu: &Cpu) {
+    print!(
+        "A={:03} B={:03} X={:03} Y={:03} Z={:03} PC={:05} SP={:05} ",
+        cpu.a(),
+        cpu.b(),
+        cpu.x(),
+        cpu.y(),
+        cpu.z(),
+        cpu.pc(),
+        cpu.sp()
+    );
+    let p = cpu.p();
+    print!("P={:03} [", p);
+    #[rustfmt::skip]
+    {
+        print!("{}", if (p & Flags::NEGATIVE) == 0 { "-" } else { "N" });
+        print!("{}", if (p & Flags::OVERFLOW) == 0 { "-" } else { "V" });
+        print!("{}", if (p & Flags::EXTEND_STACK_DISABLE) == 0 { "-" } else { "E" });
+        print!("{}", if (p & Flags::BREAK) == 0 { "-" } else { "B" });
+        print!("{}", if (p & Flags::DECIMAL_MODE) == 0 { "-" } else { "D" });
+        print!("{}", if (p & Flags::INTERRUPT_DISABLE) == 0 { "-" } else { "I" });
+        print!("{}", if (p & Flags::ZERO) == 0 { "-" } else { "Z" });
+        print!("{}", if (p & Flags::CARRY) == 0 { "-" } else { "C" });
+    };
+    println!("]");
 }

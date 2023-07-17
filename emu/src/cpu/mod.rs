@@ -5,17 +5,17 @@ use crate::bus::{Bus, BusDevice};
 #[cfg(test)]
 mod tests;
 
-enum Flags {}
+pub enum Flags {}
 
 impl Flags {
-    const CARRY: u8 = 1 << 0;
-    const ZERO: u8 = 1 << 1;
-    const INTERRUPT_DISABLE: u8 = 1 << 2;
-    const DECIMAL_MODE: u8 = 1 << 3;
-    const BREAK: u8 = 1 << 4;
-    const EXTEND_STACK_DISABLE: u8 = 1 << 5;
-    const OVERFLOW: u8 = 1 << 6;
-    const NEGATIVE: u8 = 1 << 7;
+    pub const CARRY: u8 = 1 << 0;
+    pub const ZERO: u8 = 1 << 1;
+    pub const INTERRUPT_DISABLE: u8 = 1 << 2;
+    pub const DECIMAL_MODE: u8 = 1 << 3;
+    pub const BREAK: u8 = 1 << 4;
+    pub const EXTEND_STACK_DISABLE: u8 = 1 << 5;
+    pub const OVERFLOW: u8 = 1 << 6;
+    pub const NEGATIVE: u8 = 1 << 7;
 }
 
 #[derive(Debug, Default)]
@@ -37,6 +37,38 @@ pub struct Cpu {
 impl Cpu {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn a(&self) -> u8 {
+        self.a
+    }
+
+    pub fn b(&self) -> u8 {
+        self.b
+    }
+
+    pub fn x(&self) -> u8 {
+        self.x
+    }
+
+    pub fn y(&self) -> u8 {
+        self.y
+    }
+
+    pub fn z(&self) -> u8 {
+        self.z
+    }
+
+    pub fn p(&self) -> u8 {
+        self.p
+    }
+
+    pub fn sp(&self) -> u16 {
+        u16::from_le_bytes(self.sp)
+    }
+
+    pub fn pc(&self) -> u16 {
+        u16::from_le_bytes(self.pc)
     }
 
     pub fn irq(&mut self) {

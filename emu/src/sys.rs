@@ -180,7 +180,7 @@ where
             irq_latch,
             mem,
         });
-        let mut io_view = IoView { cpu };
+        let mut io_view = IoView {};
         ser0.reset(&mut io_view);
         ser1.reset(&mut io_view);
         fdc0.reset(&mut io_view);
@@ -206,13 +206,13 @@ where
             irq_latch,
             mem,
         });
-        let mut io_view = IoView { cpu };
+        let mut io_view = IoView {};
         ser0.tick(&mut io_view);
         ser1.tick(&mut io_view);
         fdc0.tick(&mut io_view);
         fdc1.tick(&mut io_view);
 
-        // update IRQ latch
+        // update IRQ latch (pre-shifting makes implementing the jump table trivial)
         if fdc0.drq() {
             *irq_latch = 1 << 1;
         } else if fdc1.drq() {
@@ -232,35 +232,18 @@ where
         }
     }
 
-    pub fn view(&mut self) -> (&'_ mut Cpu, CpuView<'_, S0, S1, F0, F1>) {
-        let System {
-            cpu,
-            ser0,
-            ser1,
-            fdc0,
-            fdc1,
-            irq_latch,
-            mem,
-        } = self;
-        (
-            cpu,
-            CpuView {
-                ser0,
-                ser1,
-                fdc0,
-                fdc1,
-                irq_latch,
-                mem,
-            },
-        )
+    pub fn ser0_mut(&mut self) -> &mut Uart<S0> {
+        &mut self.ser0
+    }
+
+    pub fn cpu(&self) -> &Cpu {
+        &self.cpu
     }
 }
 
-struct IoView<'a> {
-    cpu: &'a mut Cpu,
-}
+struct IoView {}
 
-impl<'a> Bus for IoView<'a> {
+impl Bus for IoView {
     fn read(&mut self, _addr: u16) -> u8 {
         0
     }

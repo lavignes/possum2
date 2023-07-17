@@ -63,6 +63,10 @@ impl<T> Uart<T> {
     pub fn irq(&self) -> bool {
         (self.status & StatusFlags::INTERRUPT) != 0
     }
+
+    pub fn handle_mut(&mut self) -> &mut T {
+        &mut self.handle
+    }
 }
 
 impl<T: Read + Write> BusDevice for Uart<T> {
