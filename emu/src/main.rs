@@ -136,6 +136,7 @@ struct Args {
     /// Path to rom file
     rom: PathBuf,
 
+    /// FD0 image file
     #[arg(long)]
     fd0: PathBuf,
 
@@ -262,20 +263,13 @@ fn examine(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
     } else {
         cpu.pc()
     };
-    let true_start = start & 0xFFF0; // start printing from 16-byte address
-    let true_end = (((start as u32) + ((15 - (start & 0x000F)) as u32)) & 0xFFFF) as u16;
-    print!("{true_start:04X}  ");
-    for _ in true_start..start {
-        print!("__ ");
-    }
-    for addr in start..=true_end {
+    let end = ((start as u32) + 15).min(0xFFFF) as u16;
+    print!("{start:04X}  ");
+    for addr in start..=end {
         print!("{:02X} ", mem.read(addr));
     }
     print!(" |");
-    for _ in true_start..start {
-        print!("_");
-    }
-    for addr in start..=true_end {
+    for addr in start..=end {
         let c = mem.read(addr);
         if c.is_ascii_graphic() {
             print!("{}", c as char);
@@ -298,20 +292,13 @@ fn examine_base10(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
     } else {
         cpu.pc()
     };
-    let true_start = start & 0xFFF0; // start printing from 16-byte address
-    let true_end = (((start as u32) + ((15 - (start & 0x000F)) as u32)) & 0xFFFF) as u16;
-    print!("{true_start:05}  ");
-    for _ in true_start..start {
-        print!("___ ");
-    }
-    for addr in start..=true_end {
+    let end = ((start as u32) + 15).min(0xFFFF) as u16;
+    print!("{start:05}  ");
+    for addr in start..=end {
         print!("{:03} ", mem.read(addr));
     }
     print!(" |");
-    for _ in true_start..start {
-        print!("_");
-    }
-    for addr in start..=true_end {
+    for addr in start..=end {
         let c = mem.read(addr);
         if c.is_ascii_graphic() {
             print!("{}", c as char);
@@ -334,20 +321,13 @@ fn examine_signed_base10(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
     } else {
         cpu.pc()
     };
-    let true_start = start & 0xFFF0; // start printing from 16-byte address
-    let true_end = (((start as u32) + ((15 - (start & 0x000F)) as u32)) & 0xFFFF) as u16;
-    print!("{true_start:05}  ");
-    for _ in true_start..start {
-        print!("____ ");
-    }
-    for addr in start..=true_end {
+    let end = ((start as u32) + 15).min(0xFFFF) as u16;
+    print!("{start:05}  ");
+    for addr in start..=end {
         print!("{:+04} ", mem.read(addr) as i8);
     }
     print!(" |");
-    for _ in true_start..start {
-        print!("_");
-    }
-    for addr in start..=true_end {
+    for addr in start..=end {
         let c = mem.read(addr);
         if c.is_ascii_graphic() {
             print!("{}", c as char);
