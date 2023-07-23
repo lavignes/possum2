@@ -233,9 +233,12 @@ const OPS: &[Op] = &[
     ("ASR", &[(BP, 0x44), (ACCUM, 0x43), (BP_X, 0x54)]),
     ("ASW", &[(ABS, 0xCB)]),
     ("BIT", &[(IMM, 0x89), (ABS, 0x2C), (BP, 0x24), (BP_X, 0x34), (ABS_X, 0x3C)]),
-    ("BBR", &[(BP_REL, 0x0F), (BP_REL, 0x1F), (BP_REL, 0x2F), (BP_REL, 0x3F), (BP_REL, 0x4F), (BP_REL, 0x5F), (BP_REL, 0x6F), (BP_REL, 0x7F)]),
-    ("BBS", &[(BP_REL, 0x8F), (BP_REL, 0x9F), (BP_REL, 0xAF), (BP_REL, 0xBF), (BP_REL, 0xCF), (BP_REL, 0xDF), (BP_REL, 0xEF), (BP_REL, 0xFF)]),
+    ("BBR", &[(BP_REL, 0x0F), (BP_REL, 0x1F), (BP_REL, 0x2F), (BP_REL, 0x3F), (BP_REL, 0x4F), (BP_REL, 0x5F), (BP_REL, 0x6F), (BP_REL, 0x7F)]), // special
+    ("BBS", &[(BP_REL, 0x8F), (BP_REL, 0x9F), (BP_REL, 0xAF), (BP_REL, 0xBF), (BP_REL, 0xCF), (BP_REL, 0xDF), (BP_REL, 0xEF), (BP_REL, 0xFF)]), // special
 
+    ("STA", &[(ABS, 0x8D), (BP, 0x85), (IND_X, 0x81), (IND_Y, 0x91), (IND_Z, 0x92), (IND_SP, 0x82), (BP_X, 0x95), (ABS_X, 0x9D), (ABS_Y, 0x99)]),
+    // TODO: MORE
+    ("LDA", &[(IMM, 0xA9)]),
 
     ("JMP", &[(ABS, 0x4C), (IND_ABS, 0x6C), (IND_ABS_X, 0x7C)]),
     ("JSR", &[(ABS, 0x20), (IND_ABS, 0x22), (IND_ABS_X, 0x23)]),
