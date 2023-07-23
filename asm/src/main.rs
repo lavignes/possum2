@@ -83,6 +83,14 @@ fn pass(asm: &mut Asm<File>) -> Result<(), Box<dyn Error>> {
                 .iter()
                 .any(|op| asm.lexer.string.eq_ignore_ascii_case(op.0))
         {
+            // apply outer label
+            if asm.lexer.string.starts_with(".") {
+                asm.lexer.string = format!("{}{}", asm.outer_label, asm.lexer.string);
+            } else {
+                asm.outer_label.clear();
+                asm.outer_label.push_str(&asm.lexer.string);
+            }
+
             // is this already in the symbol table?
             let sym_index = if let Some(item) = asm
                 .syms
@@ -90,13 +98,12 @@ fn pass(asm: &mut Asm<File>) -> Result<(), Box<dyn Error>> {
                 .enumerate()
                 .find(|item| asm.lexer.string == item.1 .0)
             {
-                // disallow redef unless symbol starts with a dot
-                // also allowed to redef during second pass
-                if asm.lexer.string.starts_with(".") || asm.emit {
-                    item.0
-                } else {
+                // allowed to redef during second pass
+                // todo: should test if label value didnt change
+                if !asm.emit {
                     Err(asm.lexer.err("symbol already defined"))?
                 }
+                item.0
             } else {
                 // save the label in the symbol table
                 let index = asm.syms.len();
@@ -621,6 +628,7 @@ struct Asm<R> {
     output: Box<dyn Write>,
     pc: u16,
     syms: Vec<(String, i32)>,
+    outer_label: String,
     emit: bool,
 }
 
@@ -631,6 +639,7 @@ impl<R: Read + Seek> Asm<R> {
             output,
             pc: 0,
             syms: Vec::new(),
+            outer_label: String::new(),
             emit: false,
         }
     }
@@ -648,6 +657,7 @@ impl<R: Read + Seek> Asm<R> {
             output,
             pc: 0,
             syms,
+            outer_label: String::new(),
             emit: true,
         })
     }
@@ -1186,6 +1196,20 @@ impl<R: Read + Seek> Lexer<R> {
                 }
                 self.stash = Some(STRING);
                 return Ok(STRING);
+            }
+
+            // char
+            if c == b'\'' {
+                self.inner.eat();
+                if let Some(c) = self.inner.peek()? {
+                    if c.is_ascii_graphic() {
+                        self.inner.eat();
+                        self.number = c as i32;
+                        self.stash = Some(NUMBER);
+                        return Ok(NUMBER);
+                    }
+                }
+                return Err(self.err("unexpected garbage"));
             }
 
             // idents and single chars
