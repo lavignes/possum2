@@ -73,7 +73,8 @@ fn pass(asm: &mut Asm<File>) -> Result<(), Box<dyn Error>> {
             asm.lexer.eat();
             let expr = expr(asm)?;
             let expr = const_expr(asm, expr)?;
-            asm.pc = const_word(asm, expr)?;
+            let pc = const_word(asm, expr)?;
+            asm.set_pc(pc);
             end_of_line(asm)?;
             continue;
         }
@@ -134,31 +135,53 @@ fn pass(asm: &mut Asm<File>) -> Result<(), Box<dyn Error>> {
             }
 
             // otherwise it is a pointer to the current PC
-            asm.syms[sym_index].1 = asm.pc as u32 as i32;
+            asm.syms[sym_index].1 = asm.pc() as u32 as i32;
         }
 
-        // pseudo op?
-        if asm.lexer.peek()? == IDENT {
-            if let Some(pop) = POPS
-                .iter()
-                .find(|pop| asm.lexer.string.eq_ignore_ascii_case(pop.0))
-            {
+        if asm.bss_mode {
+            // only pad, adj, and txt work in bss
+            if asm.lexer.peek()? == IDENT && asm.lexer.string.eq_ignore_ascii_case("PAD") {
                 asm.lexer.eat();
-                // evaluate the pseudo op
-                pop.1(asm)?;
+                pad(asm)?;
                 end_of_line(asm)?;
                 continue;
             }
-        }
+            if asm.lexer.peek()? == IDENT && asm.lexer.string.eq_ignore_ascii_case("ADJ") {
+                asm.lexer.eat();
+                adj(asm)?;
+                end_of_line(asm)?;
+                continue;
+            }
+            if asm.lexer.peek()? == IDENT && asm.lexer.string.eq_ignore_ascii_case("TXT") {
+                asm.lexer.eat();
+                txt(asm)?;
+                end_of_line(asm)?;
+                continue;
+            }
+        } else {
+            // pseudo op?
+            if asm.lexer.peek()? == IDENT {
+                if let Some(pop) = POPS
+                    .iter()
+                    .find(|pop| asm.lexer.string.eq_ignore_ascii_case(pop.0))
+                {
+                    asm.lexer.eat();
+                    // evaluate the pseudo op
+                    pop.1(asm)?;
+                    end_of_line(asm)?;
+                    continue;
+                }
+            }
 
-        // op?
-        if asm.lexer.peek()? == IDENT {
-            let op = OPS
-                .iter()
-                .find(|op| asm.lexer.string.eq_ignore_ascii_case(op.0))
-                .ok_or_else(|| asm.lexer.err("unknown opcode"))?;
-            asm.lexer.eat();
-            operand(asm, op)?;
+            // op?
+            if asm.lexer.peek()? == IDENT {
+                let op = OPS
+                    .iter()
+                    .find(|op| asm.lexer.string.eq_ignore_ascii_case(op.0))
+                    .ok_or_else(|| asm.lexer.err("unknown opcode"))?;
+                asm.lexer.eat();
+                operand(asm, op)?;
+            }
         }
 
         end_of_line(asm)?;
@@ -543,7 +566,7 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
         let expr = expr(asm)?;
         // can we optimize the branch into a single byte?
         if let Some(expr) = expr {
-            let branch = expr - ((asm.pc as u32 as i32) + 2); // branch needs +2 (size of instr)
+            let branch = expr - ((asm.pc() as u32 as i32) + 2); // branch needs +2 (size of instr)
             if (branch >= (i8::MIN as i32))
                 && (branch <= (i8::MAX as i32))
                 // sad hack. bsr is always word-relative
@@ -701,9 +724,12 @@ struct Asm<R> {
     output: Box<dyn Write>,
     pc: u16,
     pc_end: bool,
+    bss: u16,
+    bss_end: bool,
     syms: Vec<(String, i32)>,
     outer_label: String,
     emit: bool,
+    bss_mode: bool,
 }
 
 impl<R: Read + Seek> Asm<R> {
@@ -713,9 +739,12 @@ impl<R: Read + Seek> Asm<R> {
             output,
             pc: 0,
             pc_end: false,
+            bss: 0,
+            bss_end: false,
             syms: Vec::new(),
             outer_label: String::new(),
             emit: false,
+            bss_mode: false,
         }
     }
 
@@ -732,9 +761,12 @@ impl<R: Read + Seek> Asm<R> {
             output,
             pc: 0,
             pc_end: false,
+            bss: 0,
+            bss_end: false,
             syms,
             outer_label: String::new(),
             emit: true,
+            bss_mode: false,
         })
     }
 
@@ -742,19 +774,51 @@ impl<R: Read + Seek> Asm<R> {
         self.output.write_all(bytes)
     }
 
+    fn pc(&self) -> u16 {
+        if self.bss_mode {
+            self.bss
+        } else {
+            self.pc
+        }
+    }
+
+    fn pc_end(&self) -> bool {
+        if self.bss_mode {
+            self.bss_end
+        } else {
+            self.pc_end
+        }
+    }
+
+    fn set_pc_end(&mut self) {
+        if self.bss_mode {
+            self.bss_end = true;
+        } else {
+            self.pc_end = true;
+        }
+    }
+
+    fn set_pc(&mut self, val: u16) {
+        if self.bss_mode {
+            self.bss = val;
+        } else {
+            self.pc = val;
+        }
+    }
+
     fn add_pc(&mut self, amt: u16) -> io::Result<()> {
-        if self.pc_end && amt > 0 {
+        if self.pc_end() && amt > 0 {
             return Err(self.lexer.err("pc overflow"));
         }
-        if let Some(value) = self.pc.checked_add(amt) {
-            self.pc = value;
+        if let Some(value) = self.pc().checked_add(amt) {
+            self.set_pc(value);
         } else {
-            let value = self.pc.wrapping_add(amt);
+            let value = self.pc().wrapping_add(amt);
             if value > 0 {
                 return Err(self.lexer.err("pc overflow"));
             }
-            self.pc_end = true;
-            self.pc = value;
+            self.set_pc_end();
+            self.set_pc(value);
         }
         Ok(())
     }
@@ -775,7 +839,7 @@ fn const_byte<R: Read + Seek>(asm: &mut Asm<R>, expr: i32) -> io::Result<u8> {
 }
 
 fn const_short_branch<R: Read + Seek>(asm: &mut Asm<R>, expr: i32) -> io::Result<u8> {
-    let branch = expr - (asm.pc as u32 as i32);
+    let branch = expr - (asm.pc() as u32 as i32);
     if (branch < (i8::MIN as i32)) || (branch > (i8::MAX as i32)) {
         return Err(asm.lexer.err("branch distance too far"));
     }
@@ -783,7 +847,7 @@ fn const_short_branch<R: Read + Seek>(asm: &mut Asm<R>, expr: i32) -> io::Result
 }
 
 fn const_long_branch<R: Read + Seek>(asm: &mut Asm<R>, expr: i32) -> io::Result<u16> {
-    let branch = expr - (asm.pc as u32 as i32);
+    let branch = expr - (asm.pc() as u32 as i32);
     if (branch < (i16::MIN as i32)) || (branch > (i16::MAX as i32)) {
         return Err(asm.lexer.err("branch distance too far"));
     }
@@ -902,7 +966,7 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
         if asm.lexer.peek()? == STAR {
             asm.lexer.eat();
             if !seen_value {
-                values.push(asm.pc as u32 as i32);
+                values.push(asm.pc() as u32 as i32);
                 seen_value = true;
                 continue;
             }
@@ -1113,7 +1177,7 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
     }
 }
 
-fn bytes<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
+fn byt<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
     loop {
         if asm.lexer.peek()? == STRING {
             if asm.emit {
@@ -1140,7 +1204,7 @@ fn bytes<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
     Ok(())
 }
 
-fn words<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
+fn wrd<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
     loop {
         let expr = expr(asm)?;
         if asm.emit {
@@ -1161,7 +1225,7 @@ fn pad<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
     let expr = expr(asm)?;
     let expr = const_expr(asm, expr)?;
     let word = const_word(asm, expr)?;
-    if asm.emit {
+    if asm.emit && !asm.bss_mode {
         for _ in 0..word {
             asm.write(&[0xEA])?;
         }
@@ -1174,7 +1238,7 @@ fn adj<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
     let expr = expr(asm)?;
     let expr = const_expr(asm, expr)?;
     let word = const_word(asm, expr)?;
-    let adj = asm.pc % word;
+    let adj = asm.pc() % word;
     if asm.emit {
         for _ in 0..adj {
             asm.write(&[0xEA])?;
@@ -1184,14 +1248,25 @@ fn adj<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
     Ok(())
 }
 
+fn bss<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
+    asm.bss_mode = true;
+    Ok(())
+}
+fn txt<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
+    asm.bss_mode = false;
+    Ok(())
+}
+
 type POp = (&'static str, fn(&mut Asm<File>) -> io::Result<()>);
 
 #[rustfmt::skip]
 const POPS: &[POp] = &[
-    ("BYT", bytes),
-    ("WRD", words),
+    ("BYT", byt),
+    ("WRD", wrd),
     ("PAD", pad),
     ("ADJ", adj),
+    ("BSS", bss),
+    ("TXT", txt),
 ];
 
 type Token = u16;
