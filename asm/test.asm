@@ -11,6 +11,7 @@ INT_LATCH	equ $F0FF
 
 vReset		sta SER0_STATUS		; reset uart
 		lda #$0B		; disable interrupts, enable tx/rx
+		lda #$0B or $FF
 		sta SER0_CMD
 .loop		bsr ser0Rx
 		bsr ser0Tx

@@ -250,12 +250,32 @@ const OPS: &[Op] = &[
     ("BSR", &[(WREL, 0x63)]),
     ("BVC", &[(REL, 0x50), (WREL, 0x53)]),
     ("BVS", &[(REL, 0x70), (WREL, 0x73)]),
-
-    ("LDA", &[(IMM, 0xA9), (ABS, 0xAD), (BP, 0xA5), (IND_X, 0xA1), (IND_Y, 0xB1), (IND_Z, 0xB2), (IND_SP, 0xE2), (BP_X, 0xB5), (ABS_X, 0xBD), (ABS_Y, 0xB9)]),
-    ("STA", &[(ABS, 0x8D), (BP, 0x85), (IND_X, 0x81), (IND_Y, 0x91), (IND_Z, 0x92), (IND_SP, 0x82), (BP_X, 0x95), (ABS_X, 0x9D), (ABS_Y, 0x99)]),
-
+    ("CMP", &[(IMM, 0xC9), (ABS, 0xCD), (BP, 0xC5), (IND_X, 0xC1), (IND_Y, 0xD1), (IND_Z, 0xD2), (BP_X, 0xD5), (ABS_X, 0xDD), (ABS_Y, 0xD9)]),
+    ("DEC", &[(ABS, 0xCE), (BP, 0xC6), (ACCUM, 0x3A), (BP_X, 0xD6), (ABS_X, 0xDE)]),
+    ("EOR", &[(IMM, 0x49), (ABS, 0x4D), (BP, 0x45), (IND_X, 0x41), (IND_Y, 0x51), (IND_Z, 0x52), (BP_X, 0x55), (ABS_X, 0x5D), (ABS_Y, 0x59)]),
+    ("INC", &[(ABS, 0xEE), (BP, 0xE6), (ACCUM, 0x1A), (BP_X, 0xF6), (ABS_X, 0xFE)]),
+    ("INW", &[(BP, 0xE3)]),
     ("JMP", &[(ABS, 0x4C), (IND_ABS, 0x6C), (IND_ABS_X, 0x7C)]),
     ("JSR", &[(ABS, 0x20), (IND_ABS, 0x22), (IND_ABS_X, 0x23)]),
+    ("LDA", &[(IMM, 0xA9), (ABS, 0xAD), (BP, 0xA5), (IND_X, 0xA1), (IND_Y, 0xB1), (IND_Z, 0xB2), (IND_SP, 0xE2), (BP_X, 0xB5), (ABS_X, 0xBD), (ABS_Y, 0xB9)]),
+    ("LDX", &[(IMM, 0xA2), (ABS, 0xAE), (BP, 0xA6), (BP_Y, 0xB6), (ABS_Y, 0xBE)]),
+    ("LDY", &[(IMM, 0xA0), (ABS, 0xAC), (BP, 0xA4), (BP_X, 0xB4), (ABS_X, 0xBC)]),
+    ("LDZ", &[(IMM, 0xA3), (ABS, 0xAB), (ABS_X, 0xBB)]),
+    ("LSR", &[(ABS, 0x4E), (BP, 0x46), (ACCUM, 0x4A), (BP_X, 0x56), (ABS_X, 0x5E)]),
+    ("NEG", &[(ACCUM, 0x42)]),
+    ("ORA", &[(IMM, 0x09), (ABS, 0x0D), (BP, 0x05), (IND_X, 0x01), (IND_Y, 0x11), (IND_Z, 0x12), (BP_X, 0x15), (ABS_X, 0x1D), (ABS_Y, 0x19)]),
+    ("RMB", &[(BP, 0x07), (BP, 0x17), (BP, 0x27), (BP, 0x37), (BP, 0x47), (BP, 0x57), (BP, 0x67), (BP, 0x77)]), // special
+    ("ROL", &[(ABS, 0x2E), (BP, 0x26), (ACCUM, 0x2A), (BP_X, 0x36), (ABS_X, 0x3E)]),
+    ("ROR", &[(ABS, 0x6E), (BP, 0x66), (ACCUM, 0x6A), (BP_X, 0x76), (ABS_X, 0x7E)]),
+    ("ROW", &[(ABS, 0xEB)]),
+    ("SBC", &[(IMM, 0xE9), (ABS, 0xED), (BP, 0xE5), (IND_X, 0xE1), (IND_Y, 0xF1), (IND_Z, 0xF2), (BP_X, 0xF5), (ABS_X, 0xFD), (ABS_Y, 0xF9)]),
+    ("SMB", &[(BP, 0x87), (BP, 0x97), (BP, 0xA7), (BP, 0xB7), (BP, 0xC7), (BP, 0xD7), (BP, 0xE7), (BP, 0xF7)]), // special
+    ("STA", &[(ABS, 0x8D), (BP, 0x85), (IND_X, 0x81), (IND_Y, 0x91), (IND_Z, 0x92), (IND_SP, 0x82), (BP_X, 0x95), (ABS_X, 0x9D), (ABS_Y, 0x99)]),
+    ("STX", &[(ABS, 0x8E), (BP, 0x86), (ABS_Y, 0x96), (ABS_Y, 0x9B)]),
+    ("STY", &[(ABS, 0x8C), (BP, 0x84), (ABS_X, 0x94), (ABS_X, 0x8B)]),
+    ("STZ", &[(ABS, 0x9C), (BP, 0x64), (ABS_X, 0x74), (ABS_X, 0x9E)]),
+    ("TRB", &[(ABS, 0x1C), (BP, 0x14)]), // xfer reset bits, M[addr] &= ~A
+    ("TSB", &[(ABS, 0x0C), (BP, 0x04)]), // xfer set bits, M[addr] |= A
 ];
 
 fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
@@ -441,6 +461,46 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
             op.1.iter()
                 .enumerate()
                 .find(|(i, (mode, _))| (*mode == BP_REL) && (*i == (bit as usize)))
+        {
+            if asm.emit {
+                asm.write(&[*opcode])?;
+            }
+            asm.add_pc(3)?; // add now so we can compute branch
+            {
+                let expr = expr(asm)?;
+                if asm.emit {
+                    let expr = const_expr(asm, expr)?;
+                    let byte = const_byte(asm, expr)?;
+                    asm.write(&[byte])?;
+                }
+            }
+            expect(asm, COMMA)?;
+            {
+                let expr = expr(asm)?;
+                if asm.emit {
+                    let expr = const_expr(asm, expr)?;
+                    let branch = const_short_branch(asm, expr)?;
+                    asm.write(&[branch])?;
+                }
+            }
+            return Ok(());
+        }
+        return Err(asm.lexer.err("illegal addressing mode"));
+    }
+
+    // rmb and smb (these are really just special impl instructions IMO)
+    if op.0.eq_ignore_ascii_case("RMB") || op.0.eq_ignore_ascii_case("SMB") {
+        let bit = expr(asm)?;
+        let bit = const_expr(asm, bit)?;
+        if (bit < 0) || (bit > 7) {
+            return Err(asm.lexer.err("invalid bit"));
+        }
+        expect(asm, COMMA)?;
+
+        if let Some((_, (_, opcode))) =
+            op.1.iter()
+                .enumerate()
+                .find(|(i, (mode, _))| (*mode == BP) && (*i == (bit as usize)))
         {
             if asm.emit {
                 asm.write(&[*opcode])?;
@@ -753,13 +813,14 @@ fn expect<R: Read + Seek>(asm: &mut Asm<R>, t: Token) -> io::Result<()> {
 
 fn precedence(op: &'static str) -> u8 {
     match op {
-        "neg" | "lo" | "hi" => 0,
+        "neg" | "pos" | "lo" | "hi" => 0,
         "/" | "mod" | "*" => 1,
         "asl" | "lsr" | "asr" => 1,
         "+" | "-" | "xor" => 2,
         "not" => 3,
         "and" => 4,
         "or" => 5,
+        "(" => 0xFF,
         _ => unreachable!(),
     }
 }
@@ -768,6 +829,7 @@ fn apply(values: &mut Vec<i32>, op: &'static str) {
     let right = values.pop().unwrap();
     match op {
         "neg" => values.push(-right),
+        "pos" => values.push(right),
         "not" => values.push(!right),
         "lo" => values.push(((right as u32) & 0xFF) as i32),
         "hi" => values.push((((right as u32) & 0xFF00) >> 8) as i32),
@@ -825,6 +887,7 @@ fn push_and_apply(values: &mut Vec<i32>, operators: &mut Vec<&'static str>, op: 
             break;
         }
         apply(values, top);
+        operators.pop();
     }
     operators.push(op);
 }
@@ -833,7 +896,7 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
     let mut values = Vec::new();
     let mut operators = Vec::new();
     let mut seen_value = false;
-    let mut paren_balance = 0;
+    let mut paren_depth = 0;
     let mut unsolved = false;
     loop {
         if asm.lexer.peek()? == STAR {
@@ -849,10 +912,11 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
         }
         if asm.lexer.peek()? == PLUS {
             asm.lexer.eat();
-            if !seen_value {
-                return Err(asm.lexer.err("expected value"));
+            if seen_value {
+                push_and_apply(&mut values, &mut operators, "+");
+            } else {
+                push_and_apply(&mut values, &mut operators, "pos");
             }
-            push_and_apply(&mut values, &mut operators, "+");
             seen_value = false;
             continue;
         }
@@ -869,7 +933,7 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
         if asm.lexer.peek()? == LESS {
             asm.lexer.eat();
             if seen_value {
-                return Err(asm.lexer.err("expected value"));
+                return Err(asm.lexer.err("expected operator"));
             }
             push_and_apply(&mut values, &mut operators, "lo");
             seen_value = false;
@@ -878,7 +942,7 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
         if asm.lexer.peek()? == GREATER {
             asm.lexer.eat();
             if seen_value {
-                return Err(asm.lexer.err("expected value"));
+                return Err(asm.lexer.err("expected operator"));
             }
             push_and_apply(&mut values, &mut operators, "hi");
             seen_value = false;
@@ -907,23 +971,25 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
             if seen_value {
                 return Err(asm.lexer.err("expected operator"));
             }
-            paren_balance += 1;
+            paren_depth += 1;
             operators.push("(");
             seen_value = false;
             continue;
         }
         if asm.lexer.peek()? == PCLOSE {
             // this pclose is probably part of the indirect address
-            if operators.is_empty() && paren_balance == 0 {
+            if operators.is_empty() && paren_depth == 0 {
                 break;
             }
             asm.lexer.eat();
+            paren_depth -= 1;
             if !seen_value {
                 return Err(asm.lexer.err("expected value"));
             }
             loop {
                 if let Some(op) = operators.pop() {
-                    if op == ")" {
+                    // we apply ops until we see the start of this grouping
+                    if op == "(" {
                         break;
                     }
                     apply(&mut values, op);
@@ -1104,6 +1170,20 @@ fn pad<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
     Ok(())
 }
 
+fn adj<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
+    let expr = expr(asm)?;
+    let expr = const_expr(asm, expr)?;
+    let word = const_word(asm, expr)?;
+    let adj = asm.pc % word;
+    if asm.emit {
+        for _ in 0..adj {
+            asm.write(&[0xEA])?;
+        }
+    }
+    asm.add_pc(adj)?;
+    Ok(())
+}
+
 type POp = (&'static str, fn(&mut Asm<File>) -> io::Result<()>);
 
 #[rustfmt::skip]
@@ -1111,6 +1191,7 @@ const POPS: &[POp] = &[
     ("BYT", bytes),
     ("WRD", words),
     ("PAD", pad),
+    ("ADJ", adj),
 ];
 
 type Token = u16;
