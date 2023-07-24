@@ -47,10 +47,15 @@ fn main_real() -> Result<(), Box<dyn Error>> {
     };
 
     let mut asm = Asm::new(lexer, output);
+    eprint!("pass1: ");
     pass(&mut asm)?;
+    eprintln!("ok");
 
+    eprint!("pass2: ");
     let mut asm = asm.rewind()?;
-    pass(&mut asm)
+    pass(&mut asm)?;
+    eprintln!("ok");
+    Ok(())
 }
 
 fn pass(asm: &mut Asm<File>) -> Result<(), Box<dyn Error>> {
@@ -235,10 +240,19 @@ const OPS: &[Op] = &[
     ("BIT", &[(IMM, 0x89), (ABS, 0x2C), (BP, 0x24), (BP_X, 0x34), (ABS_X, 0x3C)]),
     ("BBR", &[(BP_REL, 0x0F), (BP_REL, 0x1F), (BP_REL, 0x2F), (BP_REL, 0x3F), (BP_REL, 0x4F), (BP_REL, 0x5F), (BP_REL, 0x6F), (BP_REL, 0x7F)]), // special
     ("BBS", &[(BP_REL, 0x8F), (BP_REL, 0x9F), (BP_REL, 0xAF), (BP_REL, 0xBF), (BP_REL, 0xCF), (BP_REL, 0xDF), (BP_REL, 0xEF), (BP_REL, 0xFF)]), // special
+    ("BCC", &[(REL, 0x90), (WREL, 0x93)]),
+    ("BCS", &[(REL, 0xB0), (WREL, 0xB3)]),
+    ("BEQ", &[(REL, 0xF0), (WREL, 0xF3)]),
+    ("BMI", &[(REL, 0x30), (WREL, 0x33)]),
+    ("BNE", &[(REL, 0xD0), (WREL, 0xD3)]),
+    ("BPL", &[(REL, 0x10), (WREL, 0x13)]),
+    ("BRU", &[(REL, 0x80), (WREL, 0x83)]),
+    ("BSR", &[(WREL, 0x63)]),
+    ("BVC", &[(REL, 0x50), (WREL, 0x53)]),
+    ("BVS", &[(REL, 0x70), (WREL, 0x73)]),
 
+    ("LDA", &[(IMM, 0xA9), (ABS, 0xAD), (BP, 0xA5), (IND_X, 0xA1), (IND_Y, 0xB1), (IND_Z, 0xB2), (IND_SP, 0xE2), (BP_X, 0xB5), (ABS_X, 0xBD), (ABS_Y, 0xB9)]),
     ("STA", &[(ABS, 0x8D), (BP, 0x85), (IND_X, 0x81), (IND_Y, 0x91), (IND_Z, 0x92), (IND_SP, 0x82), (BP_X, 0x95), (ABS_X, 0x9D), (ABS_Y, 0x99)]),
-    // TODO: MORE
-    ("LDA", &[(IMM, 0xA9)]),
 
     ("JMP", &[(ABS, 0x4C), (IND_ABS, 0x6C), (IND_ABS_X, 0x7C)]),
     ("JSR", &[(ABS, 0x20), (IND_ABS, 0x22), (IND_ABS_X, 0x23)]),
@@ -246,23 +260,23 @@ const OPS: &[Op] = &[
 
 fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
     // implied?
-    if op.1.len() == 1 {
+    if (op.1.len() == 1) && (op.1[0].0 == IMPL) {
         let opcode = op.1[0].1;
         if asm.emit {
             asm.write(&[opcode])?;
         }
-        asm.pc += 1;
+        asm.add_pc(1)?;
         // handle the few special cases longer than 1 byte
         if op.0.eq_ignore_ascii_case("AUG") {
             if asm.emit {
                 asm.write(&[0xEA, 0xEA, 0xEA])?;
             }
-            asm.pc += 3;
+            asm.add_pc(3)?;
         } else if op.0.eq_ignore_ascii_case("BRK") {
             if asm.emit {
                 asm.write(&[0xEA])?;
             }
-            asm.pc += 1;
+            asm.add_pc(1)?;
         } else if op.0.eq_ignore_ascii_case("RTN") {
             let expr = expr(asm)?;
             if asm.emit {
@@ -270,7 +284,7 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
                 let byte = const_byte(asm, expr)?;
                 asm.write(&[byte])?;
             }
-            asm.pc += 1;
+            asm.add_pc(1)?;
         }
         return Ok(());
     }
@@ -282,7 +296,7 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
             if asm.emit {
                 asm.write(&[*opcode])?;
             }
-            asm.pc += 1;
+            asm.add_pc(1)?;
             let expr = expr(asm)?;
             if op.0.eq_ignore_ascii_case("PHW") {
                 if asm.emit {
@@ -290,14 +304,14 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
                     let word = const_word(asm, expr)?.to_le_bytes();
                     asm.write(&word)?;
                 }
-                asm.pc += 2;
+                asm.add_pc(2)?;
             } else {
                 if asm.emit {
                     let expr = const_expr(asm, expr)?;
                     let byte = const_byte(asm, expr)?;
                     asm.write(&[byte])?;
                 }
-                asm.pc += 1;
+                asm.add_pc(1)?;
             }
             return Ok(());
         }
@@ -311,7 +325,7 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
             if asm.emit {
                 asm.write(&[*opcode])?;
             }
-            asm.pc += 1;
+            asm.add_pc(1)?;
             return Ok(());
         }
         return Err(asm.lexer.err("illegal addressing mode"))?;
@@ -335,13 +349,13 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
                 }
             }
             expect(asm, PCLOSE)?;
-            asm.pc += 1;
+            asm.add_pc(1)?;
             if asm.emit {
                 let expr = const_expr(asm, expr)?;
                 let word = const_word(asm, expr)?.to_le_bytes();
                 asm.write(&word)?;
             }
-            asm.pc += 2;
+            asm.add_pc(2)?;
             return Ok(());
         }
 
@@ -372,13 +386,13 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
                     asm.write(&[*opcode])?;
                 }
             }
-            asm.pc += 1;
+            asm.add_pc(1)?;
             if asm.emit {
                 let expr = const_expr(asm, expr)?;
                 let byte = const_byte(asm, expr)?;
                 asm.write(&[byte])?;
             }
-            asm.pc += 1;
+            asm.add_pc(1)?;
             return Ok(());
         }
 
@@ -404,13 +418,13 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
                 asm.write(&[*opcode])?;
             }
         }
-        asm.pc += 1;
+        asm.add_pc(1)?;
         if asm.emit {
             let expr = const_expr(asm, expr)?;
             let byte = const_byte(asm, expr)?;
             asm.write(&[byte])?;
         }
-        asm.pc += 1;
+        asm.add_pc(1)?;
         return Ok(());
     }
 
@@ -431,16 +445,15 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
             if asm.emit {
                 asm.write(&[*opcode])?;
             }
-            asm.pc += 1;
+            asm.add_pc(3)?; // add now so we can compute branch
             {
                 let expr = expr(asm)?;
                 if asm.emit {
                     let expr = const_expr(asm, expr)?;
-                    let branch = const_short_branch(asm, expr)?;
-                    asm.write(&[branch])?;
+                    let byte = const_byte(asm, expr)?;
+                    asm.write(&[byte])?;
                 }
             }
-            asm.pc += 1;
             expect(asm, COMMA)?;
             {
                 let expr = expr(asm)?;
@@ -450,7 +463,6 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
                     asm.write(&[branch])?;
                 }
             }
-            asm.pc += 1;
             return Ok(());
         }
         return Err(asm.lexer.err("illegal addressing mode"));
@@ -471,7 +483,7 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
         let expr = expr(asm)?;
         // can we optimize the branch into a single byte?
         if let Some(expr) = expr {
-            let branch = expr - (asm.pc as u32 as i32);
+            let branch = expr - ((asm.pc as u32 as i32) + 2); // branch needs +2 (size of instr)
             if (branch >= (i8::MIN as i32))
                 && (branch <= (i8::MAX as i32))
                 // sad hack. bsr is always word-relative
@@ -481,24 +493,22 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
                 if asm.emit {
                     asm.write(&[op.1.iter().find(|(mode, _)| *mode == REL).unwrap().1])?;
                 }
-                asm.pc += 1;
                 if asm.emit {
                     asm.write(&[branch])?;
                 }
-                asm.pc += 1;
+                asm.add_pc(2)?;
                 return Ok(());
             }
         }
         if asm.emit {
             asm.write(&[op.1.iter().find(|(mode, _)| *mode == WREL).unwrap().1])?;
         }
-        asm.pc += 1;
+        asm.add_pc(3)?; // ensure we have correct branch
         if asm.emit {
             let expr = const_expr(asm, expr)?;
             let branch = const_long_branch(asm, expr)?.to_le_bytes();
             asm.write(&branch)?;
         }
-        asm.pc += 2;
         return Ok(());
     }
 
@@ -523,12 +533,12 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
                             if asm.emit {
                                 asm.write(&[*opcode])?;
                             }
-                            asm.pc += 1;
+                            asm.add_pc(1)?;
                             if asm.emit {
                                 let byte = expr as u32 as u8;
                                 asm.write(&[byte])?;
                             }
-                            asm.pc += 1;
+                            asm.add_pc(1)?;
                             return Ok(());
                         }
                     }
@@ -541,13 +551,13 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
             if asm.emit {
                 asm.write(&[*opcode])?;
             }
-            asm.pc += 1;
+            asm.add_pc(1)?;
             if asm.emit {
                 let expr = const_expr(asm, expr)?;
                 let word = const_word(asm, expr)?.to_le_bytes();
                 asm.write(&word)?;
             }
-            asm.pc += 2;
+            asm.add_pc(2)?;
             return Ok(());
         }
 
@@ -560,12 +570,12 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
                             if asm.emit {
                                 asm.write(&[*opcode])?;
                             }
-                            asm.pc += 1;
+                            asm.add_pc(1)?;
                             if asm.emit {
                                 let byte = expr as u32 as u8;
                                 asm.write(&[byte])?;
                             }
-                            asm.pc += 1;
+                            asm.add_pc(1)?;
                             return Ok(());
                         }
                     }
@@ -578,13 +588,13 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
             if asm.emit {
                 asm.write(&[*opcode])?;
             }
-            asm.pc += 1;
+            asm.add_pc(1)?;
             if asm.emit {
                 let expr = const_expr(asm, expr)?;
                 let word = const_word(asm, expr)?.to_le_bytes();
                 asm.write(&word)?;
             }
-            asm.pc += 2;
+            asm.add_pc(2)?;
             return Ok(());
         }
         return Err(asm.lexer.err("illegal addressing mode"));
@@ -598,12 +608,12 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
                     if asm.emit {
                         asm.write(&[*opcode])?;
                     }
-                    asm.pc += 1;
+                    asm.add_pc(1)?;
                     if asm.emit {
                         let byte = expr as u32 as u8;
                         asm.write(&[byte])?;
                     }
-                    asm.pc += 1;
+                    asm.add_pc(1)?;
                     return Ok(());
                 }
             }
@@ -616,13 +626,13 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
     if asm.emit {
         asm.write(&[*opcode])?;
     }
-    asm.pc += 1;
+    asm.add_pc(1)?;
     if asm.emit {
         let expr = const_expr(asm, expr)?;
         let word = const_word(asm, expr)?.to_le_bytes();
         asm.write(&word)?;
     }
-    asm.pc += 2;
+    asm.add_pc(2)?;
     Ok(())
 }
 
@@ -630,6 +640,7 @@ struct Asm<R> {
     lexer: Lexer<R>,
     output: Box<dyn Write>,
     pc: u16,
+    pc_end: bool,
     syms: Vec<(String, i32)>,
     outer_label: String,
     emit: bool,
@@ -641,6 +652,7 @@ impl<R: Read + Seek> Asm<R> {
             lexer,
             output,
             pc: 0,
+            pc_end: false,
             syms: Vec::new(),
             outer_label: String::new(),
             emit: false,
@@ -659,6 +671,7 @@ impl<R: Read + Seek> Asm<R> {
             lexer,
             output,
             pc: 0,
+            pc_end: false,
             syms,
             outer_label: String::new(),
             emit: true,
@@ -667,6 +680,23 @@ impl<R: Read + Seek> Asm<R> {
 
     fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
         self.output.write_all(bytes)
+    }
+
+    fn add_pc(&mut self, amt: u16) -> io::Result<()> {
+        if self.pc_end && amt > 0 {
+            return Err(self.lexer.err("pc overflow"));
+        }
+        if let Some(value) = self.pc.checked_add(amt) {
+            self.pc = value;
+        } else {
+            let value = self.pc.wrapping_add(amt);
+            if value > 0 {
+                return Err(self.lexer.err("pc overflow"));
+            }
+            self.pc_end = true;
+            self.pc = value;
+        }
+        Ok(())
     }
 }
 
@@ -904,6 +934,11 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
             continue;
         }
         if asm.lexer.peek()? == IDENT {
+            // apply outer label
+            if asm.lexer.string.starts_with(".") {
+                asm.lexer.string = format!("{}{}", asm.outer_label, asm.lexer.string);
+            }
+
             if let Some(sym) = asm
                 .syms
                 .iter()
@@ -1020,7 +1055,7 @@ fn bytes<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
                 let bytes = asm.lexer.string.clone();
                 asm.write(bytes.as_bytes())?;
             }
-            asm.pc += asm.lexer.string.len() as u16;
+            asm.add_pc(asm.lexer.string.len() as u16)?;
             asm.lexer.eat();
         } else {
             let expr = expr(asm)?;
@@ -1029,7 +1064,7 @@ fn bytes<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
                 let byte = const_byte(asm, expr)?;
                 asm.write(&[byte])?;
             }
-            asm.pc += 1;
+            asm.add_pc(1)?;
         }
         if asm.lexer.peek()? != COMMA {
             break;
@@ -1047,7 +1082,7 @@ fn words<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
             let word = &const_word(asm, expr)?.to_le_bytes();
             asm.write(word)?;
         }
-        asm.pc += 2;
+        asm.add_pc(2)?;
         if asm.lexer.peek()? != COMMA {
             break;
         }
@@ -1065,7 +1100,7 @@ fn pad<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
             asm.write(&[0xEA])?;
         }
     }
-    asm.pc += word;
+    asm.add_pc(word)?;
     Ok(())
 }
 
