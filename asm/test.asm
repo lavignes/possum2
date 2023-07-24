@@ -1,5 +1,4 @@
 ; vim: ft=pasm sw=8 ts=8 cc=80 noet
-
 SER0_DATA	equ $F010
 SER0_STATUS	equ $F011
 SER0_CMD	equ $F012

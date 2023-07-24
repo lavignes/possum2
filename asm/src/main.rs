@@ -18,6 +18,10 @@ struct Args {
     /// Output file (default: stdout)
     #[arg(short, long)]
     output: Option<PathBuf>,
+
+    /// Symbol file
+    #[arg(short, long)]
+    sym: Option<PathBuf>,
 }
 
 fn main() -> ExitCode {
@@ -55,6 +59,19 @@ fn main_real() -> Result<(), Box<dyn Error>> {
     let mut asm = asm.rewind()?;
     pass(&mut asm)?;
     eprintln!("ok");
+
+    if let Some(path) = args.sym {
+        let mut file = File::options()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(path)
+            .map_err(|e| format!("cannot open file: {e}"))?;
+        for sym in asm.syms {
+            writeln!(&mut file, "{}:{:04X}", sym.0, sym.1)?;
+        }
+    }
+
     Ok(())
 }
 
