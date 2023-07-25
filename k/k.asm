@@ -1,95 +1,81 @@
-; vim: ft=vasm65CE02
-SER0_DATA	.equ $F010
-SER0_STATUS	.equ $F011
-SER0_CMD	.equ $F012
-SER0_CTRL	.equ $F013
+; vim: ft=pasm sw=8 ts=8 cc=80 noet
+SER0_DATA	equ $F010
+SER0_STATUS	equ $F011
+SER0_CMD	equ $F012
+SER0_CTRL	equ $F013
 
-BANK0		.equ $F000
+BANK0		equ $F000
+INT_LATCH	equ $F0FF
 
-INT_LATCH	.equ $F0FF
+		bss
+*		equ $0200
 
-SECTOR_PTR	.ezp $00
+		txt
+*		equ $F100
 
-*	.equ $F100
-vReset:
-	sta SER0_STATUS	; reset uart
-	lda #$0B	; disable uart interrupts, enable tx/rx
-	sta SER0_CMD
+Reset		sta SER0_STATUS		; reset uart
+		lda #$0B		; disable interrupts, enable tx/rx
+		sta SER0_CMD
+.loop		bsr Ser0Rx
+		bsr Ser0Tx
+		bru .loop
 
-.loop:
-	bsr ser0Rx
-	bsr ser0Tx
-	bru .loop
+Ser0Tx		pha
+.wait		lda SER0_STATUS
+		and #$10		; wait for empty buf
+		beq .wait
+		pla
+		sta SER0_DATA
+		rts
 
-ser0Tx:
-	pha
-.txWait:
-	lda SER0_STATUS
-	and #$10	; wait for tx buffer empty
-	beq .txWait
-	pla
-	sta SER0_DATA
-	rts
+Ser0Rx		lda SER0_STATUS
+		and #$08		; wait for buf full
+		beq Ser0Rx
+		lda SER0_DATA
+		rts
 
-ser0Rx:
-	lda SER0_STATUS
-	and #$08	; wait for rx buffer full
-	beq ser0Rx
-	lda SER0_DATA
-	rts
+Irq		pha			; store a and x on caller stack
+		phx
 
-vNmi:
-	rti
+		lda BANK0
+		tax
+		lda 0
+		sta BANK0		; switched to ch 0
+		phx			; store previous bank on k stack
 
-vIrq:
-	pha		; store a and x on caller stack
-	phx
+		; todo: need to check if BRK flag is set
+		;   and go to a special BRK handler
 
-	lda BANK0
-	tax
-	lda 0
-	sta BANK0	; switched to ch 0
-	phx		; store previous chapter
+		ldx INT_LATCH		; value is multiple of 2
+		jmp (.table,x)
 
-	ldx INT_LATCH	; value is multiple of 2
-	jmp (.table,x)
-.table:
-	.dw fdc0Drq
-	.dw fdc1Drq
-	.dw fdc0Irq
-	.dw fdc1Irq
-	.dw ser0Irq
-	.dw ser1Irq
+.table		wrd Fdc0Drq
+		wrd Fdc1Drq
+		wrd Fdc0Irq
+		wrd Fdc1Irq
+		wrd Ser0Irq
+		wrd Ser1Irq
 
-.restore:
-	pla
-	sta BANK0	; restore bank 0
+.restore	pla
+		sta BANK0		; restore bank 0
+		plx			; restore a and x from caller stack
+		pla
+		rti
 
-	plx		; restore a and x from caller stack
-	pla
-	rti
+Fdc0Drq		bru Irq.restore
 
-fdc0Drq:
-	inw SECTOR_PTR
-	bru vIrq.restore
+Fdc1Drq		bru Irq.restore
 
-fdc1Drq:
-	bru vIrq.restore
+Fdc0Irq		bru Irq.restore
 
-fdc0Irq:
-	bru vIrq.restore
+Fdc1Irq		bru Irq.restore
 
-fdc1Irq:
-	bru vIrq.restore
+Ser0Irq		bru Irq.restore
 
-ser0Irq:
-	bru vIrq.restore
+Ser1Irq		bru Irq.restore
 
-ser1Irq:
-	bru vIrq.restore
+Nmi		rti
 
-; Vector Table
-*	.equ $FFFA
-	.dw vNmi
-	.dw vReset
-	.dw vIrq
+		pad $FFFA-*
+		wrd Nmi,Reset,Irq
+
