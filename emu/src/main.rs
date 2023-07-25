@@ -202,8 +202,10 @@ fn main() -> Result<(), ()> {
         }
         if debug_mode.load(Ordering::Relaxed) {
             sys.ser0_mut().handle_mut().tx.suspend_raw_mode().unwrap();
+            dissasemble(sys.mem(), sys.cpu(), None, 1);
+            let mut cached_parts = Vec::new();
             loop {
-                print!("dbg> ");
+                print!("dbg>");
                 sys.ser0_mut().handle_mut().tx.flush().unwrap();
                 let mut line = Vec::new();
                 // kind of jank, but reads are async, so we busy-wait
@@ -219,23 +221,35 @@ fn main() -> Result<(), ()> {
                 }
 
                 let line = String::from_utf8(line).unwrap();
-                let parts = line.split_whitespace().collect::<Vec<&str>>();
+                let parts = line
+                    .split_whitespace()
+                    .map(String::from)
+                    .collect::<Vec<String>>();
+                let parts = if parts.is_empty() {
+                    cached_parts.clone()
+                } else {
+                    cached_parts = parts.clone();
+                    parts
+                };
                 if !parts.is_empty() {
-                    match parts[0] {
-                        "q" => break,            // quit debugger
-                        "Q" => break 'emu,       // quit emulator
-                        "s" | "n" => sys.tick(), // single step
+                    let arg = parts.get(1).map(String::as_str);
+                    match parts[0].as_str() {
+                        "q" => break,      // quit debugger
+                        "Q" => break 'emu, // quit emulator
+                        "s" | "n" => {
+                            // single step
+                            sys.tick();
+                            dissasemble(sys.mem(), sys.cpu(), None, 1);
+                        }
                         "r" => print_cpu_regs(sys.cpu()),
                         "R" => print_cpu_regs_base10(sys.cpu()),
                         "RR" => print_cpu_regs_signed_base10(sys.cpu()),
-                        "b" => add_breakpoint(sys.cpu(), &mut breakpoints, parts.get(1).copied()),
-                        "B" => {
-                            remove_breakpoint(sys.cpu(), &mut breakpoints, parts.get(1).copied())
-                        }
-                        "x" => examine(sys.mem(), sys.cpu(), parts.get(1).copied()),
-                        "X" => examine_base10(sys.mem(), sys.cpu(), parts.get(1).copied()),
-                        "XX" => examine_signed_base10(sys.mem(), sys.cpu(), parts.get(1).copied()),
-                        "d" => dissasemble(sys.mem(), sys.cpu(), parts.get(1).copied()),
+                        "b" => add_breakpoint(sys.cpu(), &mut breakpoints, arg),
+                        "B" => remove_breakpoint(sys.cpu(), &mut breakpoints, arg),
+                        "x" => examine(sys.mem(), sys.cpu(), arg),
+                        "X" => examine_base10(sys.mem(), sys.cpu(), arg),
+                        "XX" => examine_signed_base10(sys.mem(), sys.cpu(), arg),
+                        "d" => dissasemble(sys.mem(), sys.cpu(), arg, 8),
                         "?" => print_help(),
                         _ => println!("unknown command: `{}`. type `?` for help", parts[0]),
                     }
@@ -477,7 +491,7 @@ fn print_cpu_regs_signed_base10(cpu: &Cpu) {
     println!("]");
 }
 
-fn dissasemble(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
+fn dissasemble(mem: &Mem, cpu: &Cpu, start: Option<&str>, count: usize) {
     let mut addr = if let Some(arg) = start {
         match u16::from_str_radix(arg, 16) {
             Ok(addr) => addr,
@@ -489,7 +503,7 @@ fn dissasemble(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
     } else {
         cpu.pc()
     };
-    for _ in 0..10 {
+    for _ in 0..count {
         let byte = mem.read(addr);
         print!("{addr:04X}  {byte:02X}");
         addr += 1;
@@ -499,7 +513,7 @@ fn dissasemble(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                println!("  {name} #${byte:02X}");
+                print!("  {name} #${byte:02X}");
             }
 
             ABS => {
@@ -508,19 +522,19 @@ fn dissasemble(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
                 let hi = mem.read(addr);
                 addr += 1;
                 print!(" {lo:02X} {hi:02X}   ");
-                println!("  {name} ${hi:02X}{lo:02X}");
+                print!("  {name} ${hi:02X}{lo:02X}");
             }
 
             BP => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                println!("  {name} ${byte:02X}");
+                print!("  {name} ${byte:02X}");
             }
 
             ACCUM => {
                 print!("         ");
-                println!("  {name} A");
+                print!("  {name} A");
             }
 
             IMPL if name == "AUG" => {
@@ -531,68 +545,68 @@ fn dissasemble(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
                 let hi = mem.read(addr);
                 addr += 1;
                 print!(" {lo:02X} {mid:02X} {hi:02X}");
-                println!("  {name} ${hi:02X}${mid:02X}{lo:02X}");
+                print!("  {name} ${hi:02X}${mid:02X}{lo:02X}");
             }
 
             IMPL if name == "BRK" => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                println!("  {name} #${byte:02X}");
+                print!("  {name} #${byte:02X}");
             }
 
             IMPL if name == "RTN" => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                println!("  {name} #${byte:02X}");
+                print!("  {name} #${byte:02X}");
             }
 
             IMPL => {
                 print!("         ");
-                println!("  {name}");
+                print!("  {name}");
             }
 
             IND_X => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                println!("  {name} (${byte:02X},X)");
+                print!("  {name} (${byte:02X},X)");
             }
 
             IND_Y => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                println!("  {name} (${byte:02X}),Y");
+                print!("  {name} (${byte:02X}),Y");
             }
 
             IND_Z => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                println!("  {name} (${byte:02X}),Z");
+                print!("  {name} (${byte:02X}),Z");
             }
 
             IND_SP => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                println!("  {name} (${byte:02X}, SP),Y");
+                print!("  {name} (${byte:02X}, SP),Y");
             }
 
             BP_X => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                println!("  {name} ${byte:02X},X");
+                print!("  {name} ${byte:02X},X");
             }
 
             BP_Y => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                println!("  {name} ${byte:02X},Y");
+                print!("  {name} ${byte:02X},Y");
             }
             ABS_X => {
                 let lo = mem.read(addr);
@@ -600,7 +614,7 @@ fn dissasemble(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
                 let hi = mem.read(addr);
                 addr += 1;
                 print!(" {lo:02X} {hi:02X}   ");
-                println!("  {name} ${hi:02X}{lo:02X},X");
+                print!("  {name} ${hi:02X}{lo:02X},X");
             }
             ABS_Y => {
                 let lo = mem.read(addr);
@@ -608,13 +622,13 @@ fn dissasemble(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
                 let hi = mem.read(addr);
                 addr += 1;
                 print!(" {lo:02X} {hi:02X}    ");
-                println!("  {name} ${hi:02X}{lo:02X},Y");
+                print!("  {name} ${hi:02X}{lo:02X},Y");
             }
             REL => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                println!("  {name} ${byte:02X}");
+                print!("  {name} ${byte:02X}");
             }
             WREL => {
                 let lo = mem.read(addr);
@@ -622,7 +636,7 @@ fn dissasemble(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
                 let hi = mem.read(addr);
                 addr += 1;
                 print!(" {lo:02X} {hi:02X}   ");
-                println!("  {name} ${hi:02X}{lo:02X}");
+                print!("  {name} ${hi:02X}{lo:02X}");
             }
             IND_ABS => {
                 let lo = mem.read(addr);
@@ -630,7 +644,7 @@ fn dissasemble(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
                 let hi = mem.read(addr);
                 addr += 1;
                 print!(" {lo:02X} {hi:02X}   ");
-                println!("  {name} (${hi:02X}{lo:02X})");
+                print!("  {name} (${hi:02X}{lo:02X})");
             }
             BP_REL => {
                 let lo = mem.read(addr);
@@ -638,7 +652,7 @@ fn dissasemble(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
                 let hi = mem.read(addr);
                 addr += 1;
                 print!(" {lo:02X} {hi:02X}   ");
-                println!("  {name} ${hi:02X},${lo:02X}");
+                print!("  {name} ${hi:02X},${lo:02X}");
             }
             IND_ABS_X => {
                 let lo = mem.read(addr);
@@ -646,10 +660,11 @@ fn dissasemble(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
                 let hi = mem.read(addr);
                 addr += 1;
                 print!(" {lo:02X} {hi:02X}    ");
-                println!("  {name} (${hi:02X}{lo:02X},X)");
+                print!("  {name} (${hi:02X}{lo:02X},X)");
             }
             _ => unreachable!(),
         }
+        println!();
     }
 }
 
