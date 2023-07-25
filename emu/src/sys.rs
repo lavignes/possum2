@@ -226,6 +226,8 @@ where
         } else if ser1.irq() {
             *irq_latch = 6 << 1;
         }
+        // the last 2 IRQs: PPU, and Parallel Port
+
         // tie all IRQs to CPU
         if ser0.irq() || ser1.irq() || fdc0.irq() || fdc0.drq() || fdc1.irq() || fdc1.drq() {
             cpu.irq();

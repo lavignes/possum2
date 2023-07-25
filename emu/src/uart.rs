@@ -151,6 +151,7 @@ impl<T: Read + Write> BusDevice for Uart<T> {
                 self.rx = None;
                 self.command = CommandFlags::RX_INTERRUPT_REQUEST_DISABLED;
                 // TODO: this isn't accurate. only overrun should clear on soft reset
+                //   but I use this flag to know whether to push bytes
                 self.status = StatusFlags::TX_DATA_REGISTER_EMPTY;
             }
             2 => self.command = data,

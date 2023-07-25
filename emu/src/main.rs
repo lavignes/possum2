@@ -235,6 +235,7 @@ fn main() -> Result<(), ()> {
                         "x" => examine(sys.mem(), sys.cpu(), parts.get(1).copied()),
                         "X" => examine_base10(sys.mem(), sys.cpu(), parts.get(1).copied()),
                         "XX" => examine_signed_base10(sys.mem(), sys.cpu(), parts.get(1).copied()),
+                        "d" => dissasemble(sys.mem(), sys.cpu(), parts.get(1).copied()),
                         "?" => print_help(),
                         _ => println!("unknown command: `{}`. type `?` for help", parts[0]),
                     }
@@ -391,6 +392,7 @@ fn print_help() {
     println!("`x [start]`: examine memory");
     println!("`X [start]`: examine memory (base 10)");
     println!("`XX [start]`: examine memory (signed base 10)");
+    println!("`d [start]`: disassemble memory");
     println!("`?`: show this help info");
 }
 
@@ -474,3 +476,302 @@ fn print_cpu_regs_signed_base10(cpu: &Cpu) {
     };
     println!("]");
 }
+
+fn dissasemble(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
+    let mut addr = if let Some(arg) = start {
+        match u16::from_str_radix(arg, 16) {
+            Ok(addr) => addr,
+            Err(e) => {
+                println!("error parsing start address: {e}");
+                return;
+            }
+        }
+    } else {
+        cpu.pc()
+    };
+    for _ in 0..10 {
+        let byte = mem.read(addr);
+        print!("{addr:04X}  {byte:02X}");
+        addr += 1;
+        let (name, mode) = find_op(byte).unwrap();
+        match mode {
+            IMM => {
+                let byte = mem.read(addr);
+                addr += 1;
+                print!(" {byte:02X}      ");
+                println!("  {name} #${byte:02X}");
+            }
+
+            ABS => {
+                let lo = mem.read(addr);
+                addr += 1;
+                let hi = mem.read(addr);
+                addr += 1;
+                print!(" {lo:02X} {hi:02X}   ");
+                println!("  {name} ${hi:02X}{lo:02X}");
+            }
+
+            BP => {
+                let byte = mem.read(addr);
+                addr += 1;
+                print!(" {byte:02X}      ");
+                println!("  {name} ${byte:02X}");
+            }
+
+            ACCUM => {
+                print!("         ");
+                println!("  {name} A");
+            }
+
+            IMPL if name == "AUG" => {
+                let lo = mem.read(addr);
+                addr += 1;
+                let mid = mem.read(addr);
+                addr += 1;
+                let hi = mem.read(addr);
+                addr += 1;
+                print!(" {lo:02X} {mid:02X} {hi:02X}");
+                println!("  {name} ${hi:02X}${mid:02X}{lo:02X}");
+            }
+
+            IMPL if name == "BRK" => {
+                let byte = mem.read(addr);
+                addr += 1;
+                print!(" {byte:02X}      ");
+                println!("  {name} #${byte:02X}");
+            }
+
+            IMPL if name == "RTN" => {
+                let byte = mem.read(addr);
+                addr += 1;
+                print!(" {byte:02X}      ");
+                println!("  {name} #${byte:02X}");
+            }
+
+            IMPL => {
+                print!("         ");
+                println!("  {name}");
+            }
+
+            IND_X => {
+                let byte = mem.read(addr);
+                addr += 1;
+                print!(" {byte:02X}      ");
+                println!("  {name} (${byte:02X},X)");
+            }
+
+            IND_Y => {
+                let byte = mem.read(addr);
+                addr += 1;
+                print!(" {byte:02X}      ");
+                println!("  {name} (${byte:02X}),Y");
+            }
+
+            IND_Z => {
+                let byte = mem.read(addr);
+                addr += 1;
+                print!(" {byte:02X}      ");
+                println!("  {name} (${byte:02X}),Z");
+            }
+
+            IND_SP => {
+                let byte = mem.read(addr);
+                addr += 1;
+                print!(" {byte:02X}      ");
+                println!("  {name} (${byte:02X}, SP),Y");
+            }
+
+            BP_X => {
+                let byte = mem.read(addr);
+                addr += 1;
+                print!(" {byte:02X}      ");
+                println!("  {name} ${byte:02X},X");
+            }
+
+            BP_Y => {
+                let byte = mem.read(addr);
+                addr += 1;
+                print!(" {byte:02X}      ");
+                println!("  {name} ${byte:02X},Y");
+            }
+            ABS_X => {
+                let lo = mem.read(addr);
+                addr += 1;
+                let hi = mem.read(addr);
+                addr += 1;
+                print!(" {lo:02X} {hi:02X}   ");
+                println!("  {name} ${hi:02X}{lo:02X},X");
+            }
+            ABS_Y => {
+                let lo = mem.read(addr);
+                addr += 1;
+                let hi = mem.read(addr);
+                addr += 1;
+                print!(" {lo:02X} {hi:02X}    ");
+                println!("  {name} ${hi:02X}{lo:02X},Y");
+            }
+            REL => {
+                let byte = mem.read(addr);
+                addr += 1;
+                print!(" {byte:02X}      ");
+                println!("  {name} ${byte:02X}");
+            }
+            WREL => {
+                let lo = mem.read(addr);
+                addr += 1;
+                let hi = mem.read(addr);
+                addr += 1;
+                print!(" {lo:02X} {hi:02X}   ");
+                println!("  {name} ${hi:02X}{lo:02X}");
+            }
+            IND_ABS => {
+                let lo = mem.read(addr);
+                addr += 1;
+                let hi = mem.read(addr);
+                addr += 1;
+                print!(" {lo:02X} {hi:02X}   ");
+                println!("  {name} (${hi:02X}{lo:02X})");
+            }
+            BP_REL => {
+                let lo = mem.read(addr);
+                addr += 1;
+                let hi = mem.read(addr);
+                addr += 1;
+                print!(" {lo:02X} {hi:02X}   ");
+                println!("  {name} ${hi:02X},${lo:02X}");
+            }
+            IND_ABS_X => {
+                let lo = mem.read(addr);
+                addr += 1;
+                let hi = mem.read(addr);
+                addr += 1;
+                print!(" {lo:02X} {hi:02X}    ");
+                println!("  {name} (${hi:02X}{lo:02X},X)");
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+fn find_op(byte: u8) -> Option<(&'static str, u8)> {
+    for (op, modes) in OPS {
+        for (mode, opcode) in *modes {
+            if *opcode == byte {
+                return Some((op, *mode));
+            }
+        }
+    }
+    None
+}
+
+const IMM: u8 = 0;
+const ABS: u8 = 1;
+const BP: u8 = 2;
+const ACCUM: u8 = 3;
+const IMPL: u8 = 4;
+const IND_X: u8 = 5; // (BP,X)
+const IND_Y: u8 = 6; // (BP),Y
+const IND_Z: u8 = 7; // (BP),Z
+const IND_SP: u8 = 8; // (d,SP),Y
+const BP_X: u8 = 9;
+const BP_Y: u8 = 10;
+const ABS_X: u8 = 11;
+const ABS_Y: u8 = 12;
+const REL: u8 = 13;
+const WREL: u8 = 14;
+const IND_ABS: u8 = 15; // (ABS)
+const BP_REL: u8 = 16;
+const IND_ABS_X: u8 = 17; // (ABS,X)
+
+type Op = (&'static str, &'static [(u8, u8)]);
+
+#[rustfmt::skip]
+const OPS: &[Op] = &[
+    ("AUG", &[(IMPL, 0x5C)]), // special
+    ("BRK", &[(IMPL, 0x00)]), // special
+    ("CLC", &[(IMPL, 0x18)]),
+    ("CLD", &[(IMPL, 0xD8)]),
+    ("CLE", &[(IMPL, 0x02)]),
+    ("CLI", &[(IMPL, 0x58)]),
+    ("CLV", &[(IMPL, 0xB8)]),
+    ("DEX", &[(IMPL, 0xCA)]),
+    ("DEY", &[(IMPL, 0x88)]),
+    ("DEZ", &[(IMPL, 0x3B)]),
+    ("INX", &[(IMPL, 0xE8)]),
+    ("INY", &[(IMPL, 0xC8)]),
+    ("INZ", &[(IMPL, 0x1B)]),
+    ("NOP", &[(IMPL, 0xEA)]),
+    ("PHA", &[(IMPL, 0x48)]),
+    ("PHP", &[(IMPL, 0x08)]),
+    ("PHX", &[(IMPL, 0xDA)]),
+    ("PHY", &[(IMPL, 0x5A)]),
+    ("PHZ", &[(IMPL, 0xDB)]),
+    ("PLA", &[(IMPL, 0x68)]),
+    ("PLP", &[(IMPL, 0x28)]),
+    ("PLX", &[(IMPL, 0xFA)]),
+    ("PLY", &[(IMPL, 0x7A)]),
+    ("PLZ", &[(IMPL, 0xFB)]),
+    ("RTI", &[(IMPL, 0x40)]),
+    ("RTN", &[(IMPL, 0x62)]), // special
+    ("RTS", &[(IMPL, 0x60)]),
+    ("SEC", &[(IMPL, 0x38)]),
+    ("SED", &[(IMPL, 0xF8)]),
+    ("SEE", &[(IMPL, 0x03)]),
+    ("SEI", &[(IMPL, 0x78)]),
+    ("TAB", &[(IMPL, 0x5B)]),
+    ("TAX", &[(IMPL, 0xAA)]),
+    ("TAY", &[(IMPL, 0xA8)]),
+    ("TBA", &[(IMPL, 0x7B)]),
+    ("TSX", &[(IMPL, 0xBA)]),
+    ("TSY", &[(IMPL, 0x0B)]),
+    ("TXA", &[(IMPL, 0x8A)]),
+    ("TXS", &[(IMPL, 0x9A)]),
+    ("TYA", &[(IMPL, 0x98)]),
+    ("TYS", &[(IMPL, 0x2B)]),
+    ("TZA", &[(IMPL, 0x6B)]),
+
+    ("ADC", &[(IMM, 0x69), (ABS, 0x6D), (BP, 0x65), (IND_X, 0x61), (IND_Y, 0x71), (IND_Z, 0x72), (BP_X, 0x75), (ABS_X, 0x7D), (ABS_Y, 0x79)]),
+    ("AND", &[(IMM, 0x29), (ABS, 0x2D), (BP, 0x25), (IND_X, 0x21), (IND_Y, 0x31), (IND_Z, 0x32), (BP_X, 0x35), (ABS_X, 0x3D), (ABS_Y, 0x39)]),
+    ("ASL", &[(ABS, 0x0E), (BP, 0x06), (ACCUM, 0x0A), (BP_X, 0x16), (ABS_X, 0x1E)]),
+    ("ASR", &[(BP, 0x44), (ACCUM, 0x43), (BP_X, 0x54)]),
+    ("ASW", &[(ABS, 0xCB)]),
+    ("BIT", &[(IMM, 0x89), (ABS, 0x2C), (BP, 0x24), (BP_X, 0x34), (ABS_X, 0x3C)]),
+    ("BBR", &[(BP_REL, 0x0F), (BP_REL, 0x1F), (BP_REL, 0x2F), (BP_REL, 0x3F), (BP_REL, 0x4F), (BP_REL, 0x5F), (BP_REL, 0x6F), (BP_REL, 0x7F)]), // special
+    ("BBS", &[(BP_REL, 0x8F), (BP_REL, 0x9F), (BP_REL, 0xAF), (BP_REL, 0xBF), (BP_REL, 0xCF), (BP_REL, 0xDF), (BP_REL, 0xEF), (BP_REL, 0xFF)]), // special
+    ("BCC", &[(REL, 0x90), (WREL, 0x93)]),
+    ("BCS", &[(REL, 0xB0), (WREL, 0xB3)]),
+    ("BEQ", &[(REL, 0xF0), (WREL, 0xF3)]),
+    ("BMI", &[(REL, 0x30), (WREL, 0x33)]),
+    ("BNE", &[(REL, 0xD0), (WREL, 0xD3)]),
+    ("BPL", &[(REL, 0x10), (WREL, 0x13)]),
+    ("BRU", &[(REL, 0x80), (WREL, 0x83)]),
+    ("BSR", &[(WREL, 0x63)]),
+    ("BVC", &[(REL, 0x50), (WREL, 0x53)]),
+    ("BVS", &[(REL, 0x70), (WREL, 0x73)]),
+    ("CMP", &[(IMM, 0xC9), (ABS, 0xCD), (BP, 0xC5), (IND_X, 0xC1), (IND_Y, 0xD1), (IND_Z, 0xD2), (BP_X, 0xD5), (ABS_X, 0xDD), (ABS_Y, 0xD9)]),
+    ("DEC", &[(ABS, 0xCE), (BP, 0xC6), (ACCUM, 0x3A), (BP_X, 0xD6), (ABS_X, 0xDE)]),
+    ("EOR", &[(IMM, 0x49), (ABS, 0x4D), (BP, 0x45), (IND_X, 0x41), (IND_Y, 0x51), (IND_Z, 0x52), (BP_X, 0x55), (ABS_X, 0x5D), (ABS_Y, 0x59)]),
+    ("INC", &[(ABS, 0xEE), (BP, 0xE6), (ACCUM, 0x1A), (BP_X, 0xF6), (ABS_X, 0xFE)]),
+    ("INW", &[(BP, 0xE3)]),
+    ("JMP", &[(ABS, 0x4C), (IND_ABS, 0x6C), (IND_ABS_X, 0x7C)]),
+    ("JSR", &[(ABS, 0x20), (IND_ABS, 0x22), (IND_ABS_X, 0x23)]),
+    ("LDA", &[(IMM, 0xA9), (ABS, 0xAD), (BP, 0xA5), (IND_X, 0xA1), (IND_Y, 0xB1), (IND_Z, 0xB2), (IND_SP, 0xE2), (BP_X, 0xB5), (ABS_X, 0xBD), (ABS_Y, 0xB9)]),
+    ("LDX", &[(IMM, 0xA2), (ABS, 0xAE), (BP, 0xA6), (BP_Y, 0xB6), (ABS_Y, 0xBE)]),
+    ("LDY", &[(IMM, 0xA0), (ABS, 0xAC), (BP, 0xA4), (BP_X, 0xB4), (ABS_X, 0xBC)]),
+    ("LDZ", &[(IMM, 0xA3), (ABS, 0xAB), (ABS_X, 0xBB)]),
+    ("LSR", &[(ABS, 0x4E), (BP, 0x46), (ACCUM, 0x4A), (BP_X, 0x56), (ABS_X, 0x5E)]),
+    ("NEG", &[(ACCUM, 0x42)]),
+    ("ORA", &[(IMM, 0x09), (ABS, 0x0D), (BP, 0x05), (IND_X, 0x01), (IND_Y, 0x11), (IND_Z, 0x12), (BP_X, 0x15), (ABS_X, 0x1D), (ABS_Y, 0x19)]),
+    ("RMB", &[(BP, 0x07), (BP, 0x17), (BP, 0x27), (BP, 0x37), (BP, 0x47), (BP, 0x57), (BP, 0x67), (BP, 0x77)]), // special
+    ("ROL", &[(ABS, 0x2E), (BP, 0x26), (ACCUM, 0x2A), (BP_X, 0x36), (ABS_X, 0x3E)]),
+    ("ROR", &[(ABS, 0x6E), (BP, 0x66), (ACCUM, 0x6A), (BP_X, 0x76), (ABS_X, 0x7E)]),
+    ("ROW", &[(ABS, 0xEB)]),
+    ("SBC", &[(IMM, 0xE9), (ABS, 0xED), (BP, 0xE5), (IND_X, 0xE1), (IND_Y, 0xF1), (IND_Z, 0xF2), (BP_X, 0xF5), (ABS_X, 0xFD), (ABS_Y, 0xF9)]),
+    ("SMB", &[(BP, 0x87), (BP, 0x97), (BP, 0xA7), (BP, 0xB7), (BP, 0xC7), (BP, 0xD7), (BP, 0xE7), (BP, 0xF7)]), // special
+    ("STA", &[(ABS, 0x8D), (BP, 0x85), (IND_X, 0x81), (IND_Y, 0x91), (IND_Z, 0x92), (IND_SP, 0x82), (BP_X, 0x95), (ABS_X, 0x9D), (ABS_Y, 0x99)]),
+    ("STX", &[(ABS, 0x8E), (BP, 0x86), (ABS_Y, 0x96), (ABS_Y, 0x9B)]),
+    ("STY", &[(ABS, 0x8C), (BP, 0x84), (ABS_X, 0x94), (ABS_X, 0x8B)]),
+    ("STZ", &[(ABS, 0x9C), (BP, 0x64), (ABS_X, 0x74), (ABS_X, 0x9E)]),
+    ("TRB", &[(ABS, 0x1C), (BP, 0x14)]), // xfer reset bits, M[addr] &= ~A
+    ("TSB", &[(ABS, 0x0C), (BP, 0x04)]), // xfer set bits, M[addr] |= A
+];
