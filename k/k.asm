@@ -14,11 +14,10 @@ INT_LATCH	equ $F0FF
 *		equ $F100
 
 Reset		sta SER0_STATUS		; reset uart
-		lda #$0B		; disable interrupts, enable tx/rx
+		lda #$09		; rx interrupt enable, turn on
 		sta SER0_CMD
-.loop		bsr Ser0Rx
-		bsr Ser0Tx
-		bru .loop
+		cli
+		bru *
 
 Ser0Tx		pha
 .wait		lda SER0_STATUS
@@ -39,7 +38,7 @@ Irq		pha			; store a and x on caller stack
 
 		lda BANK0
 		tax
-		lda 0
+		lda #0
 		sta BANK0		; switched to ch 0
 		phx			; store previous bank on k stack
 
@@ -48,8 +47,8 @@ Irq		pha			; store a and x on caller stack
 
 		ldx INT_LATCH		; value is multiple of 2
 		jmp (.table,x)
-
-.table		wrd Fdc0Drq
+.table		wrd 0			; value is always at least 2
+		wrd Fdc0Drq
 		wrd Fdc1Drq
 		wrd Fdc0Irq
 		wrd Fdc1Irq
@@ -70,7 +69,9 @@ Fdc0Irq		bru Irq.restore
 
 Fdc1Irq		bru Irq.restore
 
-Ser0Irq		bru Irq.restore
+Ser0Irq		bsr Ser0Rx
+		bsr Ser0Tx
+		bru Irq.restore
 
 Ser1Irq		bru Irq.restore
 

@@ -95,6 +95,9 @@ impl<T: Read + Write> BusDevice for Uart<T> {
                 }
                 _ => {
                     self.status |= StatusFlags::TX_DATA_REGISTER_EMPTY;
+                    if (self.command & CommandFlags::TX_INTERRUPT_CONTROL_MASK) == 0b0000_0100 {
+                        self.status |= StatusFlags::INTERRUPT;
+                    }
                 }
             }
             self.handle.flush().unwrap();
@@ -112,6 +115,9 @@ impl<T: Read + Write> BusDevice for Uart<T> {
                 _ => {
                     self.rx = Some(buf[0]);
                     self.status |= StatusFlags::RX_DATA_REGISTER_FULL;
+                    if (self.command & CommandFlags::RX_INTERRUPT_REQUEST_DISABLED) == 0 {
+                        self.status |= StatusFlags::INTERRUPT;
+                    }
                 }
             }
         } else {
