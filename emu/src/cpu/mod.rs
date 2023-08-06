@@ -117,7 +117,9 @@ impl Cpu {
 
     fn set_p(&mut self, value: u8) {
         // modifying p does not affect B and E flags
-        self.p |= value & !(Flags::BREAK | Flags::EXTEND_STACK_DISABLE);
+        let preserve_be = self.p & (Flags::BREAK | Flags::EXTEND_STACK_DISABLE);
+        let value = value & !(Flags::BREAK | Flags::EXTEND_STACK_DISABLE);
+        self.p = preserve_be | value;
     }
 
     // (BP,X)

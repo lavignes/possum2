@@ -143,6 +143,10 @@ struct Args {
     /// One of `TRACE`, `DEBUG`, `INFO`, `WARN`, or `ERROR`
     #[arg(short, long, default_value_t = Level::INFO)]
     log_level: Level,
+
+    /// Start with debugger enabled
+    #[arg(short, long)]
+    debug: bool,
 }
 
 fn main() -> Result<(), ()> {
@@ -185,7 +189,7 @@ fn main() -> Result<(), ()> {
         offset: 0,
     };
 
-    let debug_mode = Arc::new(AtomicBool::new(false));
+    let debug_mode = Arc::new(AtomicBool::new(args.debug));
     flag::register(consts::SIGUSR1, debug_mode.clone())
         .map_err(|e| {
             tracing::warn!("external debugger unavailable: failed to install SIGUSR1 handler: {e}")

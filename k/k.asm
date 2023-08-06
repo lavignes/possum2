@@ -36,8 +36,7 @@ Ser0Rx		lda SER0_STATUS
 Irq		pha			; store a and x on caller stack
 		phx
 
-		lda BANK0
-		tax
+		ldx BANK0
 		lda #0
 		sta BANK0		; switched to ch 0
 		phx			; store previous bank on k stack
@@ -47,33 +46,28 @@ Irq		pha			; store a and x on caller stack
 
 		ldx INT_LATCH		; value is multiple of 2
 		jmp (.table,x)
-.table		wrd 0			; value is always at least 2
-		wrd Fdc0Drq
+.table		pad 2			; value is always at least 2
+		wrd Fdc0Drq		; so we need a blank spot
 		wrd Fdc1Drq
 		wrd Fdc0Irq
 		wrd Fdc1Irq
 		wrd Ser0Irq
 		wrd Ser1Irq
 
-.restore	pla
+IrqRet		pla
 		sta BANK0		; restore bank 0
 		plx			; restore a and x from caller stack
 		pla
 		rti
 
-Fdc0Drq		bru Irq.restore
-
-Fdc1Drq		bru Irq.restore
-
-Fdc0Irq		bru Irq.restore
-
-Fdc1Irq		bru Irq.restore
-
+Fdc0Drq		bru IrqRet
+Fdc1Drq		bru IrqRet
+Fdc0Irq		bru IrqRet
+Fdc1Irq		bru IrqRet
 Ser0Irq		bsr Ser0Rx
 		bsr Ser0Tx
-		bru Irq.restore
-
-Ser1Irq		bru Irq.restore
+		bru IrqRet
+Ser1Irq		bru IrqRet
 
 Nmi		rti
 
