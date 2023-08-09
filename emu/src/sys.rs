@@ -100,7 +100,7 @@ pub struct Mem {
 impl Mem {
     fn new() -> Self {
         Self {
-            inner: vec![0; 65536 * 255],
+            inner: vec![0; 65536 * 4],
             bank_select: [0; 16],
         }
     }
@@ -213,6 +213,7 @@ where
         fdc1.tick(&mut io_view);
 
         // update IRQ latch (pre-shifting makes implementing the jump table trivial)
+        // see http://www.6502.org/mini-projects/priority-interrupt-encoder/priority-interrupt-encoder.html
         if fdc0.drq() {
             *irq_latch = 1 << 1;
         } else if fdc1.drq() {
@@ -295,7 +296,9 @@ where
 
     fn write(&mut self, addr: u16, data: u8) {
         match addr {
-            0xF000..=0xF00E => self.mem.bank_select[(addr as usize) - 0xF000] = data as usize,
+            0xF000..=0xF00E => {
+                self.mem.bank_select[(addr as usize) - 0xF000] = (data & 0b11) as usize
+            }
             0xF004..=0xF00F => {}
             0xF010..=0xF013 => self.ser0.write(addr - 0xF010, data),
             0xF014..=0xF017 => self.ser1.write(addr - 0xF014, data),

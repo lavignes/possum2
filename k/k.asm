@@ -8,12 +8,26 @@ BANK0		equ $F000
 INT_LATCH	equ $F0FF
 
 		bss
-*		equ $0200
+*		equ $0000
+ptr0		pad 2
 
 		txt
 *		equ $F100
 
-Reset		sta SER0_STATUS		; reset uart
+MemSet		dey
+		sta (ptr0),y
+		bne MemSet
+		rts
+
+Reset		lda BANK0
+		sta ptr0
+		lda BANK0+1
+		sta ptr0+1
+		lda #0
+		ldy 15
+		bsr MemSet ; fixme: y is getting set to 0??
+
+		sta SER0_STATUS		; reset uart
 		lda #$09		; rx interrupt enable, turn on
 		sta SER0_CMD
 		cli
