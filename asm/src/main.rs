@@ -77,17 +77,21 @@ fn main_real() -> Result<(), Box<dyn Error>> {
 
 fn pass(asm: &mut Asm<File>) -> Result<(), Box<dyn Error>> {
     loop {
-        if asm.lexer.peek()? == EOF {
-            break;
+        if asm.lexer_mut().peek()? == EOF {
+            if asm.lexers.len() > 1 {
+                asm.lexers.pop();
+            } else {
+                break;
+            }
         }
 
         // special case, setting PC
-        if asm.lexer.peek()? == STAR {
-            asm.lexer.eat();
-            if asm.lexer.peek()? != IDENT && !asm.lexer.string.eq_ignore_ascii_case("EQU") {
-                Err(asm.lexer.err("expected EQU"))?;
+        if asm.lexer_mut().peek()? == STAR {
+            asm.lexer_mut().eat();
+            if asm.lexer_mut().peek()? != IDENT && !asm.lexer().string.eq_ignore_ascii_case("EQU") {
+                Err(asm.lexer().err("expected EQU"))?;
             }
-            asm.lexer.eat();
+            asm.lexer_mut().eat();
             let expr = expr(asm)?;
             let expr = const_expr(asm, expr)?;
             let pc = const_word(asm, expr)?;
@@ -97,21 +101,22 @@ fn pass(asm: &mut Asm<File>) -> Result<(), Box<dyn Error>> {
         }
 
         // label?
-        if asm.lexer.peek()? == IDENT
-            && !asm.lexer.string.eq_ignore_ascii_case("EQU")
+        if asm.lexer_mut().peek()? == IDENT
+            && !asm.lexer().string.eq_ignore_ascii_case("EQU")
             && !OPS
                 .iter()
-                .any(|op| asm.lexer.string.eq_ignore_ascii_case(op.0))
+                .any(|op| asm.lexer().string.eq_ignore_ascii_case(op.0))
             && !POPS
                 .iter()
-                .any(|op| asm.lexer.string.eq_ignore_ascii_case(op.0))
+                .any(|op| asm.lexer().string.eq_ignore_ascii_case(op.0))
         {
             // apply outer label
-            if asm.lexer.string.starts_with(".") {
-                asm.lexer.string = format!("{}{}", asm.outer_label, asm.lexer.string);
+            if asm.lexer().string.starts_with(".") {
+                asm.lexer_mut().string = format!("{}{}", asm.outer_label, asm.lexer().string);
             } else {
                 asm.outer_label.clear();
-                asm.outer_label.push_str(&asm.lexer.string);
+                // todo: shouldn't need to clone
+                asm.outer_label.push_str(&asm.lexer().string.clone());
             }
 
             // is this already in the symbol table?
@@ -119,25 +124,25 @@ fn pass(asm: &mut Asm<File>) -> Result<(), Box<dyn Error>> {
                 .syms
                 .iter()
                 .enumerate()
-                .find(|item| asm.lexer.string == item.1 .0)
+                .find(|item| asm.lexer().string == item.1 .0)
             {
                 // allowed to redef during second pass
                 // todo: should test if label value didnt change
                 if !asm.emit {
-                    Err(asm.lexer.err("symbol already defined"))?
+                    Err(asm.lexer().err("symbol already defined"))?
                 }
                 item.0
             } else {
                 // save the label in the symbol table
                 let index = asm.syms.len();
-                asm.syms.push((asm.lexer.string.clone(), 0));
+                asm.syms.push((asm.lexer().string.clone(), 0));
                 index
             };
-            asm.lexer.eat();
+            asm.lexer_mut().eat();
 
             // check if this label is being defined to a value
-            if asm.lexer.peek()? == IDENT && asm.lexer.string.eq_ignore_ascii_case("EQU") {
-                asm.lexer.eat();
+            if asm.lexer_mut().peek()? == IDENT && asm.lexer().string.eq_ignore_ascii_case("EQU") {
+                asm.lexer_mut().eat();
                 let expr = expr(asm)?;
                 if asm.emit {
                     asm.syms[sym_index].1 = const_expr(asm, expr)?;
@@ -157,46 +162,42 @@ fn pass(asm: &mut Asm<File>) -> Result<(), Box<dyn Error>> {
 
         if asm.bss_mode {
             // only pad, adj, and txt work in bss
-            if asm.lexer.peek()? == IDENT && asm.lexer.string.eq_ignore_ascii_case("PAD") {
-                asm.lexer.eat();
+            if asm.lexer_mut().peek()? == IDENT && asm.lexer().string.eq_ignore_ascii_case("PAD") {
+                asm.lexer_mut().eat();
                 pad(asm)?;
-                end_of_line(asm)?;
                 continue;
             }
-            if asm.lexer.peek()? == IDENT && asm.lexer.string.eq_ignore_ascii_case("ADJ") {
-                asm.lexer.eat();
+            if asm.lexer_mut().peek()? == IDENT && asm.lexer().string.eq_ignore_ascii_case("ADJ") {
+                asm.lexer_mut().eat();
                 adj(asm)?;
-                end_of_line(asm)?;
                 continue;
             }
-            if asm.lexer.peek()? == IDENT && asm.lexer.string.eq_ignore_ascii_case("TXT") {
-                asm.lexer.eat();
+            if asm.lexer_mut().peek()? == IDENT && asm.lexer().string.eq_ignore_ascii_case("TXT") {
+                asm.lexer_mut().eat();
                 txt(asm)?;
-                end_of_line(asm)?;
                 continue;
             }
         } else {
             // pseudo op?
-            if asm.lexer.peek()? == IDENT {
+            if asm.lexer_mut().peek()? == IDENT {
                 if let Some(pop) = POPS
                     .iter()
-                    .find(|pop| asm.lexer.string.eq_ignore_ascii_case(pop.0))
+                    .find(|pop| asm.lexer().string.eq_ignore_ascii_case(pop.0))
                 {
-                    asm.lexer.eat();
+                    asm.lexer_mut().eat();
                     // evaluate the pseudo op
                     pop.1(asm)?;
-                    end_of_line(asm)?;
                     continue;
                 }
             }
 
             // op?
-            if asm.lexer.peek()? == IDENT {
+            if asm.lexer_mut().peek()? == IDENT {
                 let op = OPS
                     .iter()
-                    .find(|op| asm.lexer.string.eq_ignore_ascii_case(op.0))
-                    .ok_or_else(|| asm.lexer.err("unknown opcode"))?;
-                asm.lexer.eat();
+                    .find(|op| asm.lexer().string.eq_ignore_ascii_case(op.0))
+                    .ok_or_else(|| asm.lexer().err("unknown opcode"))?;
+                asm.lexer_mut().eat();
                 operand(asm, op)?;
             }
         }
@@ -350,8 +351,8 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
     }
 
     // immediate?
-    if asm.lexer.peek()? == HASH {
-        asm.lexer.eat();
+    if asm.lexer_mut().peek()? == HASH {
+        asm.lexer_mut().eat();
         if let Some((_, opcode)) = op.1.iter().find(|(mode, _)| *mode == IMM) {
             if asm.emit {
                 asm.write(&[*opcode])?;
@@ -375,12 +376,12 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
             }
             return Ok(());
         }
-        return Err(asm.lexer.err("illegal addressing mode"));
+        return Err(asm.lexer().err("illegal addressing mode"));
     }
 
     // accum?
-    if asm.lexer.peek()? == UPPERA {
-        asm.lexer.eat();
+    if asm.lexer_mut().peek()? == UPPERA {
+        asm.lexer_mut().eat();
         if let Some((_, opcode)) = op.1.iter().find(|(mode, _)| *mode == ACCUM) {
             if asm.emit {
                 asm.write(&[*opcode])?;
@@ -388,17 +389,17 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
             asm.add_pc(1)?;
             return Ok(());
         }
-        return Err(asm.lexer.err("illegal addressing mode"))?;
+        return Err(asm.lexer().err("illegal addressing mode"))?;
     }
 
     // some indirect thing?
-    if asm.lexer.peek()? == POPEN {
-        asm.lexer.eat();
+    if asm.lexer_mut().peek()? == POPEN {
+        asm.lexer_mut().eat();
         // jmp and jsr are the only (ABS) and (ABS,X) ops
         if op.0.eq_ignore_ascii_case("JMP") || op.0.eq_ignore_ascii_case("JSR") {
             let expr = expr(asm)?;
-            if asm.lexer.peek()? == COMMA {
-                asm.lexer.eat();
+            if asm.lexer_mut().peek()? == COMMA {
+                asm.lexer_mut().eat();
                 expect(asm, UPPERX)?;
                 if asm.emit {
                     asm.write(&[op.1.iter().find(|(mode, _)| *mode == IND_ABS_X).unwrap().1])?;
@@ -421,14 +422,14 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
 
         let expr = expr(asm)?;
         // (BP,X) or (D,SP),Y
-        if asm.lexer.peek()? == COMMA {
-            asm.lexer.eat();
-            if asm.lexer.peek()? == IDENT && asm.lexer.string.eq_ignore_ascii_case("SP") {
+        if asm.lexer_mut().peek()? == COMMA {
+            asm.lexer_mut().eat();
+            if asm.lexer_mut().peek()? == IDENT && asm.lexer().string.eq_ignore_ascii_case("SP") {
                 let (_, opcode) =
                     op.1.iter()
                         .find(|(mode, _)| *mode == IND_SP)
-                        .ok_or_else(|| asm.lexer.err("illegal addressing mode"))?;
-                asm.lexer.eat();
+                        .ok_or_else(|| asm.lexer().err("illegal addressing mode"))?;
+                asm.lexer_mut().eat();
                 expect(asm, PCLOSE)?;
                 expect(asm, COMMA)?;
                 expect(asm, UPPERY)?;
@@ -439,7 +440,7 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
                 let (_, opcode) =
                     op.1.iter()
                         .find(|(mode, _)| *mode == IND_X)
-                        .ok_or_else(|| asm.lexer.err("illegal addressing mode"))?;
+                        .ok_or_else(|| asm.lexer().err("illegal addressing mode"))?;
                 expect(asm, UPPERX)?;
                 expect(asm, PCLOSE)?;
                 if asm.emit {
@@ -459,12 +460,12 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
         // (BP),Y or (BP),Z
         expect(asm, PCLOSE)?;
         expect(asm, COMMA)?;
-        if asm.lexer.peek()? == UPPERY {
+        if asm.lexer_mut().peek()? == UPPERY {
             let (_, opcode) =
                 op.1.iter()
                     .find(|(mode, _)| *mode == IND_Y)
-                    .ok_or_else(|| asm.lexer.err("illegal addressing mode"))?;
-            asm.lexer.eat();
+                    .ok_or_else(|| asm.lexer().err("illegal addressing mode"))?;
+            asm.lexer_mut().eat();
             if asm.emit {
                 asm.write(&[*opcode])?;
             }
@@ -472,7 +473,7 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
             let (_, opcode) =
                 op.1.iter()
                     .find(|(mode, _)| *mode == IND_Z)
-                    .ok_or_else(|| asm.lexer.err("illegal addressing mode"))?;
+                    .ok_or_else(|| asm.lexer().err("illegal addressing mode"))?;
             expect(asm, UPPERZ)?;
             if asm.emit {
                 asm.write(&[*opcode])?;
@@ -493,7 +494,7 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
         let bit = expr(asm)?;
         let bit = const_expr(asm, bit)?;
         if (bit < 0) || (bit > 7) {
-            return Err(asm.lexer.err("invalid bit"));
+            return Err(asm.lexer().err("invalid bit"));
         }
         expect(asm, COMMA)?;
 
@@ -525,7 +526,7 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
             }
             return Ok(());
         }
-        return Err(asm.lexer.err("illegal addressing mode"));
+        return Err(asm.lexer().err("illegal addressing mode"));
     }
 
     // rmb and smb (these are really just special impl instructions IMO)
@@ -533,7 +534,7 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
         let bit = expr(asm)?;
         let bit = const_expr(asm, bit)?;
         if (bit < 0) || (bit > 7) {
-            return Err(asm.lexer.err("invalid bit"));
+            return Err(asm.lexer().err("invalid bit"));
         }
         expect(asm, COMMA)?;
 
@@ -565,7 +566,7 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
             }
             return Ok(());
         }
-        return Err(asm.lexer.err("illegal addressing mode"));
+        return Err(asm.lexer().err("illegal addressing mode"));
     }
 
     // other branching instrs
@@ -615,17 +616,17 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
     // BP,X or BP,Y or ABS,X or ABS,Y
 
     // a leading '|' forces absolute addressing
-    let force_abs = asm.lexer.peek()? == PIPE;
+    let force_abs = asm.lexer_mut().peek()? == PIPE;
     if force_abs {
-        asm.lexer.eat();
+        asm.lexer_mut().eat();
     }
 
     let expr = expr(asm)?;
 
-    if asm.lexer.peek()? == COMMA {
-        asm.lexer.eat();
-        if asm.lexer.peek()? == UPPERX {
-            asm.lexer.eat();
+    if asm.lexer_mut().peek()? == COMMA {
+        asm.lexer_mut().eat();
+        if asm.lexer_mut().peek()? == UPPERX {
+            asm.lexer_mut().eat();
             if !force_abs {
                 if let Some((_, opcode)) = op.1.iter().find(|(mode, _)| *mode == BP_X) {
                     if let Some(expr) = expr {
@@ -647,7 +648,7 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
             let (_, opcode) =
                 op.1.iter()
                     .find(|(mode, _)| *mode == ABS_X)
-                    .ok_or_else(|| asm.lexer.err("illegal addressing mode"))?;
+                    .ok_or_else(|| asm.lexer().err("illegal addressing mode"))?;
             if asm.emit {
                 asm.write(&[*opcode])?;
             }
@@ -661,8 +662,8 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
             return Ok(());
         }
 
-        if asm.lexer.peek()? == UPPERY {
-            asm.lexer.eat();
+        if asm.lexer_mut().peek()? == UPPERY {
+            asm.lexer_mut().eat();
             if !force_abs {
                 if let Some((_, opcode)) = op.1.iter().find(|(mode, _)| *mode == BP_Y) {
                     if let Some(expr) = expr {
@@ -684,7 +685,7 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
             let (_, opcode) =
                 op.1.iter()
                     .find(|(mode, _)| *mode == ABS_Y)
-                    .ok_or_else(|| asm.lexer.err("illegal addressing mode"))?;
+                    .ok_or_else(|| asm.lexer().err("illegal addressing mode"))?;
             if asm.emit {
                 asm.write(&[*opcode])?;
             }
@@ -697,7 +698,7 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
             asm.add_pc(2)?;
             return Ok(());
         }
-        return Err(asm.lexer.err("illegal addressing mode"));
+        return Err(asm.lexer().err("illegal addressing mode"));
     }
 
     // BP or ABS
@@ -722,7 +723,7 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
     let (_, opcode) =
         op.1.iter()
             .find(|(mode, _)| *mode == ABS)
-            .ok_or_else(|| asm.lexer.err("illegal addressing mode"))?;
+            .ok_or_else(|| asm.lexer().err("illegal addressing mode"))?;
     if asm.emit {
         asm.write(&[*opcode])?;
     }
@@ -737,7 +738,7 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
 }
 
 struct Asm<R> {
-    lexer: Lexer<R>,
+    lexers: Vec<Lexer<R>>,
     output: Box<dyn Write>,
     pc: u16,
     pc_end: bool,
@@ -752,7 +753,7 @@ struct Asm<R> {
 impl<R: Read + Seek> Asm<R> {
     fn new(lexer: Lexer<R>, output: Box<dyn Write>) -> Self {
         Self {
-            lexer,
+            lexers: vec![lexer],
             output,
             pc: 0,
             pc_end: false,
@@ -767,14 +768,14 @@ impl<R: Read + Seek> Asm<R> {
 
     fn rewind(self) -> io::Result<Self> {
         let Self {
-            lexer,
+            mut lexers,
             output,
             syms,
             ..
         } = self;
-        let lexer = lexer.rewind()?;
+        let lexer = lexers.pop().unwrap().rewind()?;
         Ok(Self {
-            lexer,
+            lexers: vec![lexer],
             output,
             pc: 0,
             pc_end: false,
@@ -789,6 +790,14 @@ impl<R: Read + Seek> Asm<R> {
 
     fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
         self.output.write_all(bytes)
+    }
+
+    fn lexer(&self) -> &Lexer<R> {
+        self.lexers.last().unwrap()
+    }
+
+    fn lexer_mut(&mut self) -> &mut Lexer<R> {
+        self.lexers.last_mut().unwrap()
     }
 
     fn pc(&self) -> u16 {
@@ -825,14 +834,14 @@ impl<R: Read + Seek> Asm<R> {
 
     fn add_pc(&mut self, amt: u16) -> io::Result<()> {
         if self.pc_end() && amt > 0 {
-            return Err(self.lexer.err("pc overflow"));
+            return Err(self.lexer().err("pc overflow"));
         }
         if let Some(value) = self.pc().checked_add(amt) {
             self.set_pc(value);
         } else {
             let value = self.pc().wrapping_add(amt);
             if value > 0 {
-                return Err(self.lexer.err("pc overflow"));
+                return Err(self.lexer().err("pc overflow"));
             }
             self.set_pc_end();
             self.set_pc(value);
@@ -843,14 +852,14 @@ impl<R: Read + Seek> Asm<R> {
 
 fn const_word<R: Read + Seek>(asm: &mut Asm<R>, expr: i32) -> io::Result<u16> {
     if (expr as u32) > (u16::MAX as u32) {
-        return Err(asm.lexer.err("expression too large to fit in word"));
+        return Err(asm.lexer().err("expression too large to fit in word"));
     }
     Ok(expr as u16)
 }
 
 fn const_byte<R: Read + Seek>(asm: &mut Asm<R>, expr: i32) -> io::Result<u8> {
     if (expr as u32) > (u8::MAX as u32) {
-        return Err(asm.lexer.err("expression too large to fit in byte"));
+        return Err(asm.lexer().err("expression too large to fit in byte"));
     }
     Ok(expr as u8)
 }
@@ -858,7 +867,7 @@ fn const_byte<R: Read + Seek>(asm: &mut Asm<R>, expr: i32) -> io::Result<u8> {
 fn const_short_branch<R: Read + Seek>(asm: &mut Asm<R>, expr: i32) -> io::Result<u8> {
     let branch = expr - (asm.pc() as u32 as i32);
     if (branch < (i8::MIN as i32)) || (branch > (i8::MAX as i32)) {
-        return Err(asm.lexer.err("branch distance too far"));
+        return Err(asm.lexer().err("branch distance too far"));
     }
     Ok(branch as i8 as u8)
 }
@@ -866,29 +875,42 @@ fn const_short_branch<R: Read + Seek>(asm: &mut Asm<R>, expr: i32) -> io::Result
 fn const_long_branch<R: Read + Seek>(asm: &mut Asm<R>, expr: i32) -> io::Result<u16> {
     let branch = expr - (asm.pc() as u32 as i32);
     if (branch < (i16::MIN as i32)) || (branch > (i16::MAX as i32)) {
-        return Err(asm.lexer.err("branch distance too far"));
+        return Err(asm.lexer().err("branch distance too far"));
     }
     Ok(branch as i16 as u16)
 }
 
 fn end_of_line<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
-    let t = asm.lexer.peek()?;
-    if t == NEWLINE || t == EOF {
-        asm.lexer.eat();
-        return Ok(());
+    let t = asm.lexer_mut().peek()?;
+    match t {
+        NEWLINE => {
+            asm.lexer_mut().eat();
+            Ok(())
+        }
+
+        EOF => {
+            if asm.lexers.len() > 1 {
+                asm.lexers.pop();
+            }
+            Ok(())
+        }
+
+        _ => {
+            dbg!(t);
+            Err(asm.lexer().err("unexpected garbage"))
+        }
     }
-    Err(asm.lexer.err("unexpected garbage"))
 }
 
 fn const_expr<R: Read + Seek>(asm: &mut Asm<R>, expr: Option<i32>) -> io::Result<i32> {
-    expr.ok_or_else(|| asm.lexer.err("expression cannot be resolved"))
+    expr.ok_or_else(|| asm.lexer().err("expression cannot be resolved"))
 }
 
 fn expect<R: Read + Seek>(asm: &mut Asm<R>, t: Token) -> io::Result<()> {
-    if asm.lexer.peek()? != t {
-        return Err(asm.lexer.err("unexpected garbage"));
+    if asm.lexer_mut().peek()? != t {
+        return Err(asm.lexer().err("unexpected garbage"));
     }
-    asm.lexer.eat();
+    asm.lexer_mut().eat();
     Ok(())
 }
 
@@ -980,8 +1002,8 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
     let mut paren_depth = 0;
     let mut unsolved = false;
     loop {
-        if asm.lexer.peek()? == STAR {
-            asm.lexer.eat();
+        if asm.lexer_mut().peek()? == STAR {
+            asm.lexer_mut().eat();
             if !seen_value {
                 values.push(asm.pc() as u32 as i32);
                 seen_value = true;
@@ -991,8 +1013,8 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
             seen_value = false;
             continue;
         }
-        if asm.lexer.peek()? == PLUS {
-            asm.lexer.eat();
+        if asm.lexer_mut().peek()? == PLUS {
+            asm.lexer_mut().eat();
             if seen_value {
                 push_and_apply(&mut values, &mut operators, "+");
             } else {
@@ -1001,8 +1023,8 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
             seen_value = false;
             continue;
         }
-        if asm.lexer.peek()? == MINUS {
-            asm.lexer.eat();
+        if asm.lexer_mut().peek()? == MINUS {
+            asm.lexer_mut().eat();
             if seen_value {
                 push_and_apply(&mut values, &mut operators, "-");
             } else {
@@ -1011,61 +1033,61 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
             seen_value = false;
             continue;
         }
-        if asm.lexer.peek()? == LESS {
-            asm.lexer.eat();
+        if asm.lexer_mut().peek()? == LESS {
+            asm.lexer_mut().eat();
             if seen_value {
-                return Err(asm.lexer.err("expected operator"));
+                return Err(asm.lexer().err("expected operator"));
             }
             push_and_apply(&mut values, &mut operators, "lo");
             seen_value = false;
             continue;
         }
-        if asm.lexer.peek()? == GREATER {
-            asm.lexer.eat();
+        if asm.lexer_mut().peek()? == GREATER {
+            asm.lexer_mut().eat();
             if seen_value {
-                return Err(asm.lexer.err("expected operator"));
+                return Err(asm.lexer().err("expected operator"));
             }
             push_and_apply(&mut values, &mut operators, "hi");
             seen_value = false;
             continue;
         }
-        if asm.lexer.peek()? == DIV {
-            asm.lexer.eat();
+        if asm.lexer_mut().peek()? == DIV {
+            asm.lexer_mut().eat();
             if !seen_value {
-                return Err(asm.lexer.err("expected value"));
+                return Err(asm.lexer().err("expected value"));
             }
             push_and_apply(&mut values, &mut operators, "/");
             seen_value = false;
             continue;
         }
-        if asm.lexer.peek()? == NUMBER {
-            asm.lexer.eat();
+        if asm.lexer_mut().peek()? == NUMBER {
+            asm.lexer_mut().eat();
             if seen_value {
-                return Err(asm.lexer.err("expected operator"));
+                return Err(asm.lexer().err("expected operator"));
             }
-            values.push(asm.lexer.number);
+            values.push(asm.lexer().number);
             seen_value = true;
             continue;
         }
-        if asm.lexer.peek()? == POPEN {
-            asm.lexer.eat();
+        if asm.lexer_mut().peek()? == POPEN {
+            asm.lexer_mut().eat();
             if seen_value {
-                return Err(asm.lexer.err("expected operator"));
+                return Err(asm.lexer().err("expected operator"));
             }
             paren_depth += 1;
             operators.push("(");
             seen_value = false;
             continue;
         }
-        if asm.lexer.peek()? == PCLOSE {
+        if asm.lexer_mut().peek()? == PCLOSE {
             // this pclose is probably part of the indirect address
             if operators.is_empty() && paren_depth == 0 {
                 break;
             }
-            asm.lexer.eat();
+            asm.lexer_mut().eat();
             paren_depth -= 1;
             if !seen_value {
-                return Err(asm.lexer.err("expected value"));
+                return Err(asm.lexer().err("expected value"));
             }
             loop {
                 if let Some(op) = operators.pop() {
@@ -1075,89 +1097,90 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
                     }
                     apply(&mut values, op);
                 } else {
-                    return Err(asm.lexer.err("unbalanced parens"));
+                    return Err(asm.lexer().err("unbalanced parens"));
                 }
             }
             continue;
         }
-        if asm.lexer.peek()? == IDENT {
+        if asm.lexer_mut().peek()? == IDENT {
             // apply outer label
-            if asm.lexer.string.starts_with(".") {
-                asm.lexer.string = format!("{}{}", asm.outer_label, asm.lexer.string);
+            if asm.lexer().string.starts_with(".") {
+                asm.lexer_mut().string = format!("{}{}", asm.outer_label, asm.lexer().string);
             }
 
             if let Some(sym) = asm
                 .syms
                 .iter()
-                .find(|sym| sym.0.eq_ignore_ascii_case(&asm.lexer.string))
+                .find(|sym| sym.0.eq_ignore_ascii_case(&asm.lexer().string))
+                .cloned()
             {
-                asm.lexer.eat();
+                asm.lexer_mut().eat();
                 if seen_value {
-                    return Err(asm.lexer.err("expected operator"));
+                    return Err(asm.lexer().err("expected operator"));
                 }
                 values.push(sym.1);
                 seen_value = true;
                 continue;
-            } else if asm.lexer.string.eq_ignore_ascii_case("mod") {
-                asm.lexer.eat();
+            } else if asm.lexer().string.eq_ignore_ascii_case("mod") {
+                asm.lexer_mut().eat();
                 if !seen_value {
-                    return Err(asm.lexer.err("expected value"));
+                    return Err(asm.lexer().err("expected value"));
                 }
                 push_and_apply(&mut values, &mut operators, "mod");
                 seen_value = false;
                 continue;
-            } else if asm.lexer.string.eq_ignore_ascii_case("asl") {
-                asm.lexer.eat();
+            } else if asm.lexer().string.eq_ignore_ascii_case("asl") {
+                asm.lexer_mut().eat();
                 if !seen_value {
-                    return Err(asm.lexer.err("expected value"));
+                    return Err(asm.lexer().err("expected value"));
                 }
                 push_and_apply(&mut values, &mut operators, "asl");
                 seen_value = false;
                 continue;
-            } else if asm.lexer.string.eq_ignore_ascii_case("lsr") {
-                asm.lexer.eat();
+            } else if asm.lexer().string.eq_ignore_ascii_case("lsr") {
+                asm.lexer_mut().eat();
                 if !seen_value {
-                    return Err(asm.lexer.err("expected value"));
+                    return Err(asm.lexer().err("expected value"));
                 }
                 push_and_apply(&mut values, &mut operators, "lsr");
                 seen_value = false;
                 continue;
-            } else if asm.lexer.string.eq_ignore_ascii_case("asr") {
-                asm.lexer.eat();
+            } else if asm.lexer().string.eq_ignore_ascii_case("asr") {
+                asm.lexer_mut().eat();
                 if !seen_value {
-                    return Err(asm.lexer.err("expected value"));
+                    return Err(asm.lexer().err("expected value"));
                 }
                 push_and_apply(&mut values, &mut operators, "asr");
                 seen_value = false;
                 continue;
-            } else if asm.lexer.string.eq_ignore_ascii_case("xor") {
-                asm.lexer.eat();
+            } else if asm.lexer().string.eq_ignore_ascii_case("xor") {
+                asm.lexer_mut().eat();
                 if !seen_value {
-                    return Err(asm.lexer.err("expected value"));
+                    return Err(asm.lexer().err("expected value"));
                 }
                 push_and_apply(&mut values, &mut operators, "xor");
                 seen_value = false;
                 continue;
-            } else if asm.lexer.string.eq_ignore_ascii_case("and") {
-                asm.lexer.eat();
+            } else if asm.lexer().string.eq_ignore_ascii_case("and") {
+                asm.lexer_mut().eat();
                 if !seen_value {
-                    return Err(asm.lexer.err("expected value"));
+                    return Err(asm.lexer().err("expected value"));
                 }
                 push_and_apply(&mut values, &mut operators, "and");
                 seen_value = false;
                 continue;
-            } else if asm.lexer.string.eq_ignore_ascii_case("or") {
-                asm.lexer.eat();
+            } else if asm.lexer().string.eq_ignore_ascii_case("or") {
+                asm.lexer_mut().eat();
                 if !seen_value {
-                    return Err(asm.lexer.err("expected value"));
+                    return Err(asm.lexer().err("expected value"));
                 }
                 push_and_apply(&mut values, &mut operators, "or");
                 seen_value = false;
                 continue;
-            } else if asm.lexer.string.eq_ignore_ascii_case("not") {
-                asm.lexer.eat();
+            } else if asm.lexer().string.eq_ignore_ascii_case("not") {
+                asm.lexer_mut().eat();
                 if seen_value {
-                    return Err(asm.lexer.err("expected value"));
+                    return Err(asm.lexer().err("expected value"));
                 }
                 push_and_apply(&mut values, &mut operators, "not");
                 seen_value = false;
@@ -1165,9 +1188,9 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
             } else {
                 // this expression is not solved
                 unsolved = true;
-                asm.lexer.eat();
+                asm.lexer_mut().eat();
                 if seen_value {
-                    return Err(asm.lexer.err("expected operator"));
+                    return Err(asm.lexer_mut().err("expected operator"));
                 }
                 values.push(1);
                 seen_value = true;
@@ -1190,20 +1213,20 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
     if let Some(value) = values.pop() {
         Ok(Some(value))
     } else {
-        Err(asm.lexer.err("expected value"))
+        Err(asm.lexer().err("expected value"))
     }
 }
 
 fn byt<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
     loop {
-        if asm.lexer.peek()? == STRING {
+        if asm.lexer_mut().peek()? == STRING {
             if asm.emit {
                 // todo: hacky, make method to write the current string buffer
-                let bytes = asm.lexer.string.clone();
+                let bytes = asm.lexer().string.clone();
                 asm.write(bytes.as_bytes())?;
             }
-            asm.add_pc(asm.lexer.string.len() as u16)?;
-            asm.lexer.eat();
+            asm.add_pc(asm.lexer().string.len() as u16)?;
+            asm.lexer_mut().eat();
         } else {
             let expr = expr(asm)?;
             if asm.emit {
@@ -1213,11 +1236,12 @@ fn byt<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
             }
             asm.add_pc(1)?;
         }
-        if asm.lexer.peek()? != COMMA {
+        if asm.lexer_mut().peek()? != COMMA {
             break;
         }
-        asm.lexer.eat();
+        asm.lexer_mut().eat();
     }
+    end_of_line(asm)?;
     Ok(())
 }
 
@@ -1230,11 +1254,12 @@ fn wrd<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
             asm.write(word)?;
         }
         asm.add_pc(2)?;
-        if asm.lexer.peek()? != COMMA {
+        if asm.lexer_mut().peek()? != COMMA {
             break;
         }
-        asm.lexer.eat();
+        asm.lexer_mut().eat();
     }
+    end_of_line(asm)?;
     Ok(())
 }
 
@@ -1248,6 +1273,7 @@ fn pad<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
         }
     }
     asm.add_pc(word)?;
+    end_of_line(asm)?;
     Ok(())
 }
 
@@ -1262,15 +1288,31 @@ fn adj<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
         }
     }
     asm.add_pc(adj)?;
+    end_of_line(asm)?;
     Ok(())
 }
 
 fn bss<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
     asm.bss_mode = true;
+    end_of_line(asm)?;
     Ok(())
 }
+
 fn txt<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
     asm.bss_mode = false;
+    end_of_line(asm)?;
+    Ok(())
+}
+
+fn inc(asm: &mut Asm<File>) -> io::Result<()> {
+    if asm.lexer_mut().peek()? != STRING {
+        return Err(asm.lexer_mut().err("expected file name"));
+    }
+    let file = File::open(&asm.lexer().string)?;
+    asm.lexer_mut().eat();
+    let reader = Reader::new(file);
+    let lexer = Lexer::new(reader);
+    asm.lexers.push(lexer);
     Ok(())
 }
 
@@ -1284,6 +1326,9 @@ const POPS: &[POp] = &[
     ("ADJ", adj),
     ("BSS", bss),
     ("TXT", txt),
+    ("INC", inc),
+//    ("DEF", def),
+//    ("END", end),
 ];
 
 type Token = u16;

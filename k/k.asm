@@ -24,8 +24,8 @@ Reset		lda BANK0
 		lda BANK0+1
 		sta ptr0+1
 		lda #0
-		ldy 15
-		bsr MemSet ; fixme: y is getting set to 0??
+		ldy #15
+		bsr MemSet
 
 		sta SER0_STATUS		; reset uart
 		lda #$09		; rx interrupt enable, turn on
