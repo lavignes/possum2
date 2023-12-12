@@ -1304,7 +1304,7 @@ fn txt<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
     Ok(())
 }
 
-fn inc(asm: &mut Asm<File>) -> io::Result<()> {
+fn inf(asm: &mut Asm<File>) -> io::Result<()> {
     if asm.lexer_mut().peek()? != STRING {
         return Err(asm.lexer_mut().err("expected file name"));
     }
@@ -1326,7 +1326,7 @@ const POPS: &[POp] = &[
     ("ADJ", adj),
     ("BSS", bss),
     ("TXT", txt),
-    ("INC", inc),
+    ("INF", inf),
 //    ("DEF", def),
 //    ("END", end),
 ];
