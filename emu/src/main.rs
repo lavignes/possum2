@@ -1,6 +1,8 @@
 use std::{
+    collections::HashMap,
     fs::File,
-    io::{self, Read, Seek, SeekFrom, Stdout, Write},
+    io::{self, BufRead, BufReader, Read, Seek, SeekFrom, Stdout, Write},
+    num::ParseIntError,
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -147,6 +149,10 @@ struct Args {
     /// Start with debugger enabled
     #[arg(short, long)]
     debug: bool,
+
+    /// Debugger symbol file
+    #[arg(long)]
+    sym: Option<PathBuf>,
 }
 
 fn main() -> Result<(), ()> {
@@ -196,6 +202,28 @@ fn main() -> Result<(), ()> {
         })
         .ok();
 
+    let mut symbols = HashMap::<u16, Vec<String>>::new();
+    if let Some(sym) = args.sym {
+        let sym_file =
+            File::open(&sym).map_err(|e| tracing::error!("failed to open SYM file: {e}"))?;
+        for (line_no, line_result) in BufReader::new(sym_file).lines().enumerate() {
+            let line = line_result.map_err(|e| tracing::error!("failed to read SYM file: {e}"))?;
+            let (label, addr) = line
+                .split_once(':')
+                .ok_or_else(|| format!("{}:{line_no}: malformed entry", sym.display()))
+                .map_err(|e| tracing::error!("failed to parse SYM file: {e}"))?;
+            let addr = u16::from_str_radix(addr, 16).map_err(|e| {
+                tracing::error!("failed to parse SYM file: {}:{line_no}: {e}", sym.display())
+            })?;
+            match symbols.get_mut(&addr) {
+                Some(labels) => labels.push(label.to_string()),
+                None => {
+                    symbols.insert(addr, vec![label.to_string()]);
+                }
+            }
+        }
+    }
+
     let mut breakpoints = Vec::new();
     let mut sys = System::new(&rom, Tty::new(), NoopIo {}, fd0, NoopIo {});
     sys.reset();
@@ -206,7 +234,7 @@ fn main() -> Result<(), ()> {
         }
         if debug_mode.load(Ordering::Relaxed) {
             sys.ser0_mut().handle_mut().tx.suspend_raw_mode().unwrap();
-            dissasemble(sys.mem(), sys.cpu(), None, 1);
+            dissasemble(sys.mem(), sys.cpu(), &symbols, None, 1);
             let mut cached_parts = Vec::new();
             loop {
                 print!("dbg>");
@@ -243,17 +271,17 @@ fn main() -> Result<(), ()> {
                         "s" | "n" => {
                             // single step
                             sys.tick();
-                            dissasemble(sys.mem(), sys.cpu(), None, 1);
+                            dissasemble(sys.mem(), sys.cpu(), &symbols, None, 1);
                         }
                         "r" => print_cpu_regs(sys.cpu()),
                         "R" => print_cpu_regs_base10(sys.cpu()),
                         "RR" => print_cpu_regs_signed_base10(sys.cpu()),
-                        "b" => add_breakpoint(sys.cpu(), &mut breakpoints, arg),
-                        "B" => remove_breakpoint(sys.cpu(), &mut breakpoints, arg),
-                        "x" => examine(sys.mem(), sys.cpu(), arg),
-                        "X" => examine_base10(sys.mem(), sys.cpu(), arg),
-                        "XX" => examine_signed_base10(sys.mem(), sys.cpu(), arg),
-                        "d" => dissasemble(sys.mem(), sys.cpu(), arg, 8),
+                        "b" => add_breakpoint(sys.cpu(), &mut breakpoints, &symbols, arg),
+                        "B" => remove_breakpoint(sys.cpu(), &mut breakpoints, &symbols, arg),
+                        "x" => examine(sys.mem(), sys.cpu(), &symbols, arg),
+                        "X" => examine_base10(sys.mem(), sys.cpu(), &symbols, arg),
+                        "XX" => examine_signed_base10(sys.mem(), sys.cpu(), &symbols, arg),
+                        "d" => dissasemble(sys.mem(), sys.cpu(), &symbols, arg, 24),
                         "?" => print_help(),
                         _ => println!("unknown command: `{}`. type `?` for help", parts[0]),
                     }
@@ -270,9 +298,9 @@ fn main() -> Result<(), ()> {
     Ok(())
 }
 
-fn examine(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
+fn examine(mem: &Mem, cpu: &Cpu, symbols: &HashMap<u16, Vec<String>>, start: Option<&str>) {
     let start = if let Some(arg) = start {
-        match u16::from_str_radix(arg, 16) {
+        match parse_addr(symbols, arg) {
             Ok(addr) => addr,
             Err(e) => {
                 println!("error parsing start address: {e}");
@@ -282,7 +310,7 @@ fn examine(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
     } else {
         cpu.pc()
     };
-    let end = ((start as u32) + 15).min(0xFFFF) as u16;
+    let end = ((start as u32) + 24).min(0xFFFF) as u16;
     print!("{start:04X}  ");
     for addr in start..=end {
         print!("{:02X} ", mem.read(addr));
@@ -299,9 +327,9 @@ fn examine(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
     println!("|");
 }
 
-fn examine_base10(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
+fn examine_base10(mem: &Mem, cpu: &Cpu, symbols: &HashMap<u16, Vec<String>>, start: Option<&str>) {
     let start = if let Some(arg) = start {
-        match u16::from_str_radix(arg, 16) {
+        match parse_addr(symbols, arg) {
             Ok(addr) => addr,
             Err(e) => {
                 println!("error parsing start address: {e}");
@@ -311,7 +339,7 @@ fn examine_base10(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
     } else {
         cpu.pc()
     };
-    let end = ((start as u32) + 15).min(0xFFFF) as u16;
+    let end = ((start as u32) + 24).min(0xFFFF) as u16;
     print!("{start:05}  ");
     for addr in start..=end {
         print!("{:03} ", mem.read(addr));
@@ -328,9 +356,14 @@ fn examine_base10(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
     println!("|");
 }
 
-fn examine_signed_base10(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
+fn examine_signed_base10(
+    mem: &Mem,
+    cpu: &Cpu,
+    symbols: &HashMap<u16, Vec<String>>,
+    start: Option<&str>,
+) {
     let start = if let Some(arg) = start {
-        match u16::from_str_radix(arg, 16) {
+        match parse_addr(symbols, arg) {
             Ok(addr) => addr,
             Err(e) => {
                 println!("error parsing start address: {e}");
@@ -340,7 +373,7 @@ fn examine_signed_base10(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
     } else {
         cpu.pc()
     };
-    let end = ((start as u32) + 15).min(0xFFFF) as u16;
+    let end = ((start as u32) + 24).min(0xFFFF) as u16;
     print!("{start:05}  ");
     for addr in start..=end {
         print!("{:+04} ", mem.read(addr) as i8);
@@ -357,9 +390,14 @@ fn examine_signed_base10(mem: &Mem, cpu: &Cpu, start: Option<&str>) {
     println!("|");
 }
 
-fn add_breakpoint(cpu: &Cpu, breakpoints: &mut Vec<u16>, arg: Option<&str>) {
+fn add_breakpoint(
+    cpu: &Cpu,
+    breakpoints: &mut Vec<u16>,
+    symbols: &HashMap<u16, Vec<String>>,
+    arg: Option<&str>,
+) {
     let addr = if let Some(arg) = arg {
-        match u16::from_str_radix(arg, 16) {
+        match parse_addr(symbols, arg) {
             Ok(addr) => addr,
             Err(e) => {
                 println!("error parsing address: {e}");
@@ -377,9 +415,14 @@ fn add_breakpoint(cpu: &Cpu, breakpoints: &mut Vec<u16>, arg: Option<&str>) {
     }
 }
 
-fn remove_breakpoint(cpu: &Cpu, breakpoints: &mut Vec<u16>, arg: Option<&str>) {
+fn remove_breakpoint(
+    cpu: &Cpu,
+    breakpoints: &mut Vec<u16>,
+    symbols: &HashMap<u16, Vec<String>>,
+    arg: Option<&str>,
+) {
     let addr = if let Some(arg) = arg {
-        match u16::from_str_radix(arg, 16) {
+        match parse_addr(symbols, arg) {
             Ok(addr) => addr,
             Err(e) => {
                 println!("error parsing address: {e}");
@@ -495,9 +538,15 @@ fn print_cpu_regs_signed_base10(cpu: &Cpu) {
     println!("]");
 }
 
-fn dissasemble(mem: &Mem, cpu: &Cpu, start: Option<&str>, count: usize) {
+fn dissasemble(
+    mem: &Mem,
+    cpu: &Cpu,
+    symbols: &HashMap<u16, Vec<String>>,
+    start: Option<&str>,
+    count: usize,
+) {
     let mut addr = if let Some(arg) = start {
-        match u16::from_str_radix(arg, 16) {
+        match parse_addr(symbols, arg) {
             Ok(addr) => addr,
             Err(e) => {
                 println!("error parsing start address: {e}");
@@ -508,6 +557,9 @@ fn dissasemble(mem: &Mem, cpu: &Cpu, start: Option<&str>, count: usize) {
         cpu.pc()
     };
     for _ in 0..count {
+        if let Some(labels) = symbols.get(&addr) {
+            println!(";  {}:  ", labels[0]);
+        }
         let byte = mem.read(addr);
         print!("{addr:04X}  {byte:02X}");
         addr += 1;
@@ -517,7 +569,7 @@ fn dissasemble(mem: &Mem, cpu: &Cpu, start: Option<&str>, count: usize) {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                print!("  {name} #${byte:02X}");
+                print!("  {name} #${byte:02X}               ");
             }
 
             ABS => {
@@ -526,19 +578,23 @@ fn dissasemble(mem: &Mem, cpu: &Cpu, start: Option<&str>, count: usize) {
                 let hi = mem.read(addr);
                 addr += 1;
                 print!(" {lo:02X} {hi:02X}   ");
-                print!("  {name} ${hi:02X}{lo:02X}");
+                print!("  {name} ${hi:02X}{lo:02X}          ");
+                let addr = ((hi as u16) << 8) | (lo as u16);
+                if let Some(labels) = symbols.get(&addr) {
+                    print!("  ; {}", labels[0]);
+                }
             }
 
             BP => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                print!("  {name} ${byte:02X}");
+                print!("  {name} ${byte:02X}                ");
             }
 
             ACCUM => {
                 print!("         ");
-                print!("  {name} A");
+                print!("  {name} A                          ");
             }
 
             IMPL if name == "AUG" => {
@@ -556,119 +612,174 @@ fn dissasemble(mem: &Mem, cpu: &Cpu, start: Option<&str>, count: usize) {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                print!("  {name} #${byte:02X}");
+                print!("  {name} #${byte:02X}               ");
             }
 
             IMPL if name == "RTN" => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                print!("  {name} #${byte:02X}");
+                print!("  {name} #${byte:02X}               ");
             }
 
             IMPL => {
                 print!("         ");
-                print!("  {name}");
+                print!("  {name}                            ");
             }
 
             IND_X => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                print!("  {name} (${byte:02X},X)");
+                print!("  {name} (${byte:02X},X)            ");
             }
 
             IND_Y => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                print!("  {name} (${byte:02X}),Y");
+                print!("  {name} (${byte:02X}),Y            ");
             }
 
             IND_Z => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                print!("  {name} (${byte:02X}),Z");
+                print!("  {name} (${byte:02X}),Z            ");
             }
 
             IND_SP => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                print!("  {name} (${byte:02X}, SP),Y");
+                print!("  {name} (${byte:02X}, SP),Y        ");
             }
 
             BP_X => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                print!("  {name} ${byte:02X},X");
+                print!("  {name} ${byte:02X},X              ");
             }
 
             BP_Y => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                print!("  {name} ${byte:02X},Y");
+                print!("  {name} ${byte:02X},Y              ");
             }
+
             ABS_X => {
                 let lo = mem.read(addr);
                 addr += 1;
                 let hi = mem.read(addr);
                 addr += 1;
                 print!(" {lo:02X} {hi:02X}   ");
-                print!("  {name} ${hi:02X}{lo:02X},X");
+                print!("  {name} ${hi:02X}{lo:02X},X        ");
+                let addr = ((hi as u16) << 8) | (lo as u16);
+                if let Some(labels) = symbols.get(&addr) {
+                    print!("  ; {}", labels[0]);
+                }
             }
+
             ABS_Y => {
                 let lo = mem.read(addr);
                 addr += 1;
                 let hi = mem.read(addr);
                 addr += 1;
                 print!(" {lo:02X} {hi:02X}    ");
-                print!("  {name} ${hi:02X}{lo:02X},Y");
+                print!("  {name} ${hi:02X}{lo:02X},Y        ");
+                let addr = ((hi as u16) << 8) | (lo as u16);
+                if let Some(labels) = symbols.get(&addr) {
+                    print!("  ; {}", labels[0]);
+                }
             }
+
             REL => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                print!("  {name} ${byte:02X}");
+                print!("  {name} ${byte:02X}            ");
+                let addr = addr.wrapping_add_signed((byte as i8) as i16);
+                if let Some(labels) = symbols.get(&addr) {
+                    print!("  ; {}", labels[0]);
+                } else {
+                    print!("  ; {addr:04X}");
+                }
             }
+
             WREL => {
                 let lo = mem.read(addr);
                 addr += 1;
                 let hi = mem.read(addr);
                 addr += 1;
                 print!(" {lo:02X} {hi:02X}   ");
-                print!("  {name} ${hi:02X}{lo:02X}");
+                print!("  {name} ${hi:02X}{lo:02X}          ");
+                let addr = addr.wrapping_add_signed((((hi as u16) << 8) | (lo as u16)) as i16);
+                if let Some(labels) = symbols.get(&addr) {
+                    print!("  ; {}", labels[0]);
+                } else {
+                    print!("  ; {addr:04X}");
+                }
             }
+
             IND_ABS => {
                 let lo = mem.read(addr);
                 addr += 1;
                 let hi = mem.read(addr);
                 addr += 1;
                 print!(" {lo:02X} {hi:02X}   ");
-                print!("  {name} (${hi:02X}{lo:02X})");
+                print!("  {name} (${hi:02X}{lo:02X})        ");
+                let addr = ((hi as u16) << 8) | (lo as u16);
+                if let Some(labels) = symbols.get(&addr) {
+                    print!("  ; {}", labels[0]);
+                }
             }
+
             BP_REL => {
                 let lo = mem.read(addr);
                 addr += 1;
                 let hi = mem.read(addr);
                 addr += 1;
                 print!(" {lo:02X} {hi:02X}   ");
-                print!("  {name} ${hi:02X},${lo:02X}");
+                print!("  {name} ${hi:02X},${lo:02X}        ");
+                let addr = ((hi as u16) << 8) | (lo as u16);
+                if let Some(labels) = symbols.get(&addr) {
+                    print!("  ; {}", labels[0]);
+                }
             }
+
             IND_ABS_X => {
                 let lo = mem.read(addr);
                 addr += 1;
                 let hi = mem.read(addr);
                 addr += 1;
                 print!(" {lo:02X} {hi:02X}    ");
-                print!("  {name} (${hi:02X}{lo:02X},X)");
+                print!("  {name} (${hi:02X}{lo:02X},X)      ");
+                let addr = ((hi as u16) << 8) | (lo as u16);
+                if let Some(labels) = symbols.get(&addr) {
+                    print!("  ; {}", labels[0]);
+                }
             }
             _ => unreachable!(),
         }
         println!();
+    }
+}
+
+fn parse_addr(symbols: &HashMap<u16, Vec<String>>, arg: &str) -> Result<u16, ParseIntError> {
+    match u16::from_str_radix(arg, 16) {
+        Ok(addr) => Ok(addr),
+        Err(e) => {
+            for (addr, labels) in symbols {
+                for label in labels {
+                    if label == arg {
+                        return Ok(*addr);
+                    }
+                }
+            }
+            Err(e)
+        }
     }
 }
 
