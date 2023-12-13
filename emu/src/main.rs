@@ -16,6 +16,7 @@ use memmap2::MmapMut;
 use signal_hook::{consts, flag};
 use sys::{Mem, System};
 use termion::{
+    color::{Fg, LightBlue, LightMagenta, LightRed, LightYellow, Reset},
     raw::{IntoRawMode, RawTerminal},
     AsyncReader,
 };
@@ -558,10 +559,10 @@ fn dissasemble(
     };
     for _ in 0..count {
         if let Some(labels) = symbols.get(&addr) {
-            println!(";  {}:  ", labels[0]);
+            println!("{};  {}:{}  ", Fg(LightBlue), labels[0], Fg(Reset));
         }
         let byte = mem.read(addr);
-        print!("{addr:04X}  {byte:02X}");
+        print!("{}{addr:04X}  {}{byte:02X}", Fg(LightYellow), Fg(Reset));
         addr += 1;
         let (name, mode) = find_op(byte).unwrap();
         match mode {
@@ -569,7 +570,13 @@ fn dissasemble(
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                print!("  {name} #${byte:02X}               ");
+                print!(
+                    "  {}{name} {}#{}${byte:02X}{}               ",
+                    Fg(LightMagenta),
+                    Fg(Reset),
+                    Fg(LightRed),
+                    Fg(Reset),
+                );
             }
 
             ABS => {
@@ -578,10 +585,15 @@ fn dissasemble(
                 let hi = mem.read(addr);
                 addr += 1;
                 print!(" {lo:02X} {hi:02X}   ");
-                print!("  {name} ${hi:02X}{lo:02X}          ");
+                print!(
+                    "  {}{name} {}${hi:02X}{lo:02X}{}          ",
+                    Fg(LightMagenta),
+                    Fg(LightRed),
+                    Fg(Reset),
+                );
                 let addr = ((hi as u16) << 8) | (lo as u16);
                 if let Some(labels) = symbols.get(&addr) {
-                    print!("  ; {}", labels[0]);
+                    print!("  {}; {}{}", Fg(LightBlue), labels[0], Fg(Reset));
                 }
             }
 
@@ -589,12 +601,21 @@ fn dissasemble(
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                print!("  {name} ${byte:02X}                ");
+                print!(
+                    "  {}{name} {}${byte:02X}{}                ",
+                    Fg(LightMagenta),
+                    Fg(LightRed),
+                    Fg(Reset),
+                );
             }
 
             ACCUM => {
                 print!("         ");
-                print!("  {name} A                          ");
+                print!(
+                    "  {}{name} A{}                          ",
+                    Fg(LightMagenta),
+                    Fg(Reset)
+                );
             }
 
             IMPL if name == "AUG" => {
@@ -605,61 +626,123 @@ fn dissasemble(
                 let hi = mem.read(addr);
                 addr += 1;
                 print!(" {lo:02X} {mid:02X} {hi:02X}");
-                print!("  {name} ${hi:02X}${mid:02X}{lo:02X}");
+                print!(
+                    "  {}{name} {}${hi:02X}${mid:02X}{lo:02X}{}",
+                    Fg(LightMagenta),
+                    Fg(LightRed),
+                    Fg(Reset)
+                );
             }
 
             IMPL if name == "BRK" => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                print!("  {name} #${byte:02X}               ");
+                print!(
+                    "  {}{name} {}#{}${byte:02X}{}               ",
+                    Fg(LightMagenta),
+                    Fg(Reset),
+                    Fg(LightRed),
+                    Fg(Reset)
+                );
             }
 
             IMPL if name == "RTN" => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                print!("  {name} #${byte:02X}               ");
+                print!(
+                    "  {}{name} {}#{}${byte:02X}{}               ",
+                    Fg(LightMagenta),
+                    Fg(Reset),
+                    Fg(LightRed),
+                    Fg(Reset)
+                );
             }
 
             IMPL => {
                 print!("         ");
-                print!("  {name}                            ");
+                print!(
+                    "  {}{name}{}                            ",
+                    Fg(LightMagenta),
+                    Fg(Reset)
+                );
             }
 
             IND_X => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                print!("  {name} (${byte:02X},X)            ");
+                print!(
+                    "  {}{name} {}({}${byte:02X}{},{}X{})            ",
+                    Fg(LightMagenta),
+                    Fg(Reset),
+                    Fg(LightRed),
+                    Fg(Reset),
+                    Fg(LightMagenta),
+                    Fg(Reset),
+                );
             }
 
             IND_Y => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                print!("  {name} (${byte:02X}),Y            ");
+                print!(
+                    "  {}{name} {}({}${byte:02X}{}),{}Y{}            ",
+                    Fg(LightMagenta),
+                    Fg(Reset),
+                    Fg(LightRed),
+                    Fg(Reset),
+                    Fg(LightMagenta),
+                    Fg(Reset),
+                );
             }
 
             IND_Z => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                print!("  {name} (${byte:02X}),Z            ");
+                print!(
+                    "  {}{name} {}({}${byte:02X}{}),{}Z{}            ",
+                    Fg(LightMagenta),
+                    Fg(Reset),
+                    Fg(LightRed),
+                    Fg(Reset),
+                    Fg(LightMagenta),
+                    Fg(Reset),
+                );
             }
 
             IND_SP => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                print!("  {name} (${byte:02X}, SP),Y        ");
+                print!(
+                    "  {}{name} {}({}${byte:02X}{}, {}SP{}),{}Y{}        ",
+                    Fg(LightMagenta),
+                    Fg(Reset),
+                    Fg(LightRed),
+                    Fg(Reset),
+                    Fg(LightMagenta),
+                    Fg(Reset),
+                    Fg(LightMagenta),
+                    Fg(Reset),
+                );
             }
 
             BP_X => {
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                print!("  {name} ${byte:02X},X              ");
+                print!(
+                    "  {}{name} {}${byte:02X}{},{}X{}              ",
+                    Fg(LightMagenta),
+                    Fg(LightRed),
+                    Fg(Reset),
+                    Fg(LightMagenta),
+                    Fg(Reset),
+                );
             }
 
             BP_Y => {
@@ -675,10 +758,17 @@ fn dissasemble(
                 let hi = mem.read(addr);
                 addr += 1;
                 print!(" {lo:02X} {hi:02X}   ");
-                print!("  {name} ${hi:02X}{lo:02X},X        ");
+                print!(
+                    "  {}{name} {}${hi:02X}{lo:02X}{},{}X{}        ",
+                    Fg(LightMagenta),
+                    Fg(LightRed),
+                    Fg(Reset),
+                    Fg(LightMagenta),
+                    Fg(Reset)
+                );
                 let addr = ((hi as u16) << 8) | (lo as u16);
                 if let Some(labels) = symbols.get(&addr) {
-                    print!("  ; {}", labels[0]);
+                    print!("  {}; {}{}", Fg(LightBlue), labels[0], Fg(Reset));
                 }
             }
 
@@ -688,7 +778,14 @@ fn dissasemble(
                 let hi = mem.read(addr);
                 addr += 1;
                 print!(" {lo:02X} {hi:02X}    ");
-                print!("  {name} ${hi:02X}{lo:02X},Y        ");
+                print!(
+                    "  {}{name} {}${hi:02X}{lo:02X}{},{}Y{}        ",
+                    Fg(LightMagenta),
+                    Fg(LightRed),
+                    Fg(Reset),
+                    Fg(LightMagenta),
+                    Fg(Reset)
+                );
                 let addr = ((hi as u16) << 8) | (lo as u16);
                 if let Some(labels) = symbols.get(&addr) {
                     print!("  ; {}", labels[0]);
@@ -699,12 +796,17 @@ fn dissasemble(
                 let byte = mem.read(addr);
                 addr += 1;
                 print!(" {byte:02X}      ");
-                print!("  {name} ${byte:02X}            ");
+                print!(
+                    "  {}{name} {}${byte:02X}{}            ",
+                    Fg(LightMagenta),
+                    Fg(LightRed),
+                    Fg(Reset)
+                );
                 let addr = addr.wrapping_add_signed((byte as i8) as i16);
                 if let Some(labels) = symbols.get(&addr) {
-                    print!("  ; {}", labels[0]);
+                    print!("  {}; {}{}", Fg(LightBlue), labels[0], Fg(Reset));
                 } else {
-                    print!("  ; {addr:04X}");
+                    print!("  {}; {addr:04X}{}", Fg(LightBlue), Fg(Reset));
                 }
             }
 
@@ -714,12 +816,17 @@ fn dissasemble(
                 let hi = mem.read(addr);
                 addr += 1;
                 print!(" {lo:02X} {hi:02X}   ");
-                print!("  {name} ${hi:02X}{lo:02X}          ");
+                print!(
+                    "  {}{name} {}${hi:02X}{lo:02X}{}          ",
+                    Fg(LightMagenta),
+                    Fg(LightRed),
+                    Fg(Reset)
+                );
                 let addr = addr.wrapping_add_signed((((hi as u16) << 8) | (lo as u16)) as i16);
                 if let Some(labels) = symbols.get(&addr) {
-                    print!("  ; {}", labels[0]);
+                    print!("  {}; {}{}", Fg(LightBlue), labels[0], Fg(Reset));
                 } else {
-                    print!("  ; {addr:04X}");
+                    print!("  {}; {addr:04X}{}", Fg(LightBlue), Fg(Reset));
                 }
             }
 
@@ -729,10 +836,16 @@ fn dissasemble(
                 let hi = mem.read(addr);
                 addr += 1;
                 print!(" {lo:02X} {hi:02X}   ");
-                print!("  {name} (${hi:02X}{lo:02X})        ");
+                print!(
+                    "  {}{name} {}({}${hi:02X}{lo:02X}{})        ",
+                    Fg(LightMagenta),
+                    Fg(Reset),
+                    Fg(LightRed),
+                    Fg(Reset)
+                );
                 let addr = ((hi as u16) << 8) | (lo as u16);
                 if let Some(labels) = symbols.get(&addr) {
-                    print!("  ; {}", labels[0]);
+                    print!("  {}; {}{}", Fg(LightBlue), labels[0], Fg(Reset));
                 }
             }
 
@@ -742,10 +855,17 @@ fn dissasemble(
                 let hi = mem.read(addr);
                 addr += 1;
                 print!(" {lo:02X} {hi:02X}   ");
-                print!("  {name} ${hi:02X},${lo:02X}        ");
+                print!(
+                    "  {}{name} {}${hi:02X}{},{}${lo:02X}{}        ",
+                    Fg(LightMagenta),
+                    Fg(LightRed),
+                    Fg(Reset),
+                    Fg(LightRed),
+                    Fg(Reset)
+                );
                 let addr = ((hi as u16) << 8) | (lo as u16);
                 if let Some(labels) = symbols.get(&addr) {
-                    print!("  ; {}", labels[0]);
+                    print!("  {}; {}{}", Fg(LightBlue), labels[0], Fg(Reset));
                 }
             }
 
@@ -755,10 +875,18 @@ fn dissasemble(
                 let hi = mem.read(addr);
                 addr += 1;
                 print!(" {lo:02X} {hi:02X}    ");
-                print!("  {name} (${hi:02X}{lo:02X},X)      ");
+                print!(
+                    "  {}{name} {}({}${hi:02X}{lo:02X}{},{}X{})      ",
+                    Fg(LightMagenta),
+                    Fg(Reset),
+                    Fg(LightRed),
+                    Fg(Reset),
+                    Fg(LightMagenta),
+                    Fg(Reset)
+                );
                 let addr = ((hi as u16) << 8) | (lo as u16);
                 if let Some(labels) = symbols.get(&addr) {
-                    print!("  ; {}", labels[0]);
+                    print!("  {}; {}{}", Fg(LightBlue), labels[0], Fg(Reset));
                 }
             }
             _ => unreachable!(),
