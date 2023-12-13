@@ -1,4 +1,10 @@
 ; vim: ft=pasm sw=8 ts=8 cc=80 noet
+
+LOOP		mac
+		bru *
+		byt "Hello World"
+		emc
+
 SER0_DATA	equ $F010
 SER0_STATUS	equ $F011
 SER0_CMD	equ $F012
@@ -31,7 +37,7 @@ Reset		lda BANK0
 		lda #$09		; rx interrupt enable, turn on
 		sta SER0_CMD
 		cli
-		bru *
+		LOOP
 
 Ser0Tx		pha
 .wait		lda SER0_STATUS

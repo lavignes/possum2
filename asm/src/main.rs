@@ -55,8 +55,9 @@ fn main_real() -> Result<(), Box<dyn Error>> {
     pass(&mut asm)?;
     eprintln!("ok");
 
+    asm.rewind()?;
+
     eprint!("pass2: ");
-    let mut asm = asm.rewind()?;
     pass(&mut asm)?;
     eprintln!("ok");
 
@@ -75,7 +76,7 @@ fn main_real() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn pass(asm: &mut Asm<File>) -> Result<(), Box<dyn Error>> {
+fn pass(asm: &mut Asm) -> Result<(), Box<dyn Error>> {
     loop {
         if asm.lexer_mut().peek()? == EOF {
             if asm.lexers.len() > 1 {
@@ -85,10 +86,11 @@ fn pass(asm: &mut Asm<File>) -> Result<(), Box<dyn Error>> {
             }
         }
 
-        // special case, setting PC
+        // special case: setting PC
         if asm.lexer_mut().peek()? == STAR {
             asm.lexer_mut().eat();
-            if asm.lexer_mut().peek()? != IDENT && !asm.lexer().string.eq_ignore_ascii_case("EQU") {
+            if asm.lexer_mut().peek()? != IDENT && !asm.lexer().string().eq_ignore_ascii_case("EQU")
+            {
                 Err(asm.lexer().err("expected EQU"))?;
             }
             asm.lexer_mut().eat();
@@ -100,48 +102,121 @@ fn pass(asm: &mut Asm<File>) -> Result<(), Box<dyn Error>> {
             continue;
         }
 
+        // macro?
+        if asm.lexer_mut().peek()? == IDENT {
+            if let Some(mac) = asm
+                .macros
+                .iter()
+                .find(|mac| mac.name == asm.lexer().string())
+                .cloned()
+            {
+                asm.lexer_mut().eat();
+                let mut args = Vec::new();
+                let mut arg_strings = Vec::new();
+                loop {
+                    match asm.lexer_mut().peek()? {
+                        NEWLINE | EOF => {
+                            break;
+                        }
+                        tok @ (IDENT | STRING) => {
+                            args.push(MacroToken {
+                                inner: tok,
+                                string_index: arg_strings.len(),
+                                number: 0,
+                                line: asm.lexer().line(),
+                            });
+                            arg_strings.push(asm.lexer().string().to_string());
+                        }
+                        NUMBER => args.push(MacroToken {
+                            inner: NUMBER,
+                            string_index: 0,
+                            number: asm.lexer().number(),
+                            line: asm.lexer().line(),
+                        }),
+                        tok => args.push(MacroToken {
+                            inner: tok,
+                            string_index: 0,
+                            number: 0,
+                            line: asm.lexer().line(),
+                        }),
+                    }
+                    asm.lexer_mut().eat();
+                    if asm.lexer_mut().peek()? != COMMA {
+                        break;
+                    }
+
+                    asm.lexer_mut().eat();
+                }
+                end_of_line(asm)?;
+                // todo: invocation constructor
+                let invocation = MacroInvocation {
+                    inner: mac,
+                    invocation_line: asm.lexer().line(),
+                    pos: 0,
+                    string: String::new(),
+                    args,
+                    arg_strings,
+                };
+                asm.lexers.push(Box::new(invocation));
+                continue;
+            }
+        }
+
         // label?
         if asm.lexer_mut().peek()? == IDENT
-            && !asm.lexer().string.eq_ignore_ascii_case("EQU")
+            && !asm.lexer().string().eq_ignore_ascii_case("EQU")
+            && !asm.lexer().string().eq_ignore_ascii_case("MAC")
             && !OPS
                 .iter()
-                .any(|op| asm.lexer().string.eq_ignore_ascii_case(op.0))
+                .any(|op| asm.lexer().string().eq_ignore_ascii_case(op.0))
             && !POPS
                 .iter()
-                .any(|op| asm.lexer().string.eq_ignore_ascii_case(op.0))
+                .any(|op| asm.lexer().string().eq_ignore_ascii_case(op.0))
         {
             // apply outer label
-            if asm.lexer().string.starts_with(".") {
-                asm.lexer_mut().string = format!("{}{}", asm.outer_label, asm.lexer().string);
+            if asm.lexer().string().starts_with(".") {
+                // todo: remove clone
+                let outer_label = asm.outer_label.clone();
+                asm.lexer_mut().prepend_string(&outer_label);
             } else {
-                asm.outer_label.clear();
-                // todo: shouldn't need to clone
-                asm.outer_label.push_str(&asm.lexer().string.clone());
+                asm.outer_label = asm.lexer().string().to_string();
+            }
+
+            let name = asm.lexer().string().to_string();
+            asm.lexer_mut().eat();
+
+            // check if this label is being defined to a macro
+            if asm.lexer_mut().peek()? == IDENT && asm.lexer().string().eq_ignore_ascii_case("MAC")
+            {
+                asm.lexer_mut().eat();
+                if asm.macros.iter().any(|mac| mac.name == name) {
+                    // todo: it shouldnt even be possible for this to happen
+                    // if we try to define the macro again, it would immediately invoke it
+                    return Err(asm.lexer().err("macro already defined"))?;
+                }
+                mac(asm, name)?;
+                continue;
             }
 
             // is this already in the symbol table?
-            let sym_index = if let Some(item) = asm
-                .syms
-                .iter()
-                .enumerate()
-                .find(|item| asm.lexer().string == item.1 .0)
-            {
-                // allowed to redef during second pass
-                // todo: should test if label value didnt change
-                if !asm.emit {
-                    Err(asm.lexer().err("symbol already defined"))?
-                }
-                item.0
-            } else {
-                // save the label in the symbol table
-                let index = asm.syms.len();
-                asm.syms.push((asm.lexer().string.clone(), 0));
-                index
-            };
-            asm.lexer_mut().eat();
+            let sym_index =
+                if let Some(item) = asm.syms.iter().enumerate().find(|item| item.1 .0 == name) {
+                    // allowed to redef during second pass
+                    // todo: should test if label value didnt change
+                    if !asm.emit {
+                        Err(asm.lexer().err("symbol already defined"))?
+                    }
+                    item.0
+                } else {
+                    // save the label in the symbol table
+                    let index = asm.syms.len();
+                    asm.syms.push((name, 0));
+                    index
+                };
 
             // check if this label is being defined to a value
-            if asm.lexer_mut().peek()? == IDENT && asm.lexer().string.eq_ignore_ascii_case("EQU") {
+            if asm.lexer_mut().peek()? == IDENT && asm.lexer().string().eq_ignore_ascii_case("EQU")
+            {
                 asm.lexer_mut().eat();
                 let expr = expr(asm)?;
                 if asm.emit {
@@ -161,20 +236,29 @@ fn pass(asm: &mut Asm<File>) -> Result<(), Box<dyn Error>> {
         }
 
         if asm.bss_mode {
-            // only pad, adj, and txt work in bss
-            if asm.lexer_mut().peek()? == IDENT && asm.lexer().string.eq_ignore_ascii_case("PAD") {
+            // only pad, adj, txt, and inf work in bss
+            if asm.lexer_mut().peek()? == IDENT && asm.lexer().string().eq_ignore_ascii_case("PAD")
+            {
                 asm.lexer_mut().eat();
                 pad(asm)?;
                 continue;
             }
-            if asm.lexer_mut().peek()? == IDENT && asm.lexer().string.eq_ignore_ascii_case("ADJ") {
+            if asm.lexer_mut().peek()? == IDENT && asm.lexer().string().eq_ignore_ascii_case("ADJ")
+            {
                 asm.lexer_mut().eat();
                 adj(asm)?;
                 continue;
             }
-            if asm.lexer_mut().peek()? == IDENT && asm.lexer().string.eq_ignore_ascii_case("TXT") {
+            if asm.lexer_mut().peek()? == IDENT && asm.lexer().string().eq_ignore_ascii_case("TXT")
+            {
                 asm.lexer_mut().eat();
                 txt(asm)?;
+                continue;
+            }
+            if asm.lexer_mut().peek()? == IDENT && asm.lexer().string().eq_ignore_ascii_case("INF")
+            {
+                asm.lexer_mut().eat();
+                inf(asm)?;
                 continue;
             }
         } else {
@@ -182,7 +266,7 @@ fn pass(asm: &mut Asm<File>) -> Result<(), Box<dyn Error>> {
             if asm.lexer_mut().peek()? == IDENT {
                 if let Some(pop) = POPS
                     .iter()
-                    .find(|pop| asm.lexer().string.eq_ignore_ascii_case(pop.0))
+                    .find(|pop| asm.lexer().string().eq_ignore_ascii_case(pop.0))
                 {
                     asm.lexer_mut().eat();
                     // evaluate the pseudo op
@@ -195,7 +279,7 @@ fn pass(asm: &mut Asm<File>) -> Result<(), Box<dyn Error>> {
             if asm.lexer_mut().peek()? == IDENT {
                 let op = OPS
                     .iter()
-                    .find(|op| asm.lexer().string.eq_ignore_ascii_case(op.0))
+                    .find(|op| asm.lexer().string().eq_ignore_ascii_case(op.0))
                     .ok_or_else(|| asm.lexer().err("unknown opcode"))?;
                 asm.lexer_mut().eat();
                 operand(asm, op)?;
@@ -319,7 +403,7 @@ const OPS: &[Op] = &[
     ("TSB", &[(ABS, 0x0C), (BP, 0x04)]), // xfer set bits, M[addr] |= A
 ];
 
-fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
+fn operand(asm: &mut Asm, op: &Op) -> io::Result<()> {
     // implied?
     if (op.1.len() == 1) && (op.1[0].0 == IMPL) {
         let opcode = op.1[0].1;
@@ -424,7 +508,7 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
         // (BP,X) or (D,SP),Y
         if asm.lexer_mut().peek()? == COMMA {
             asm.lexer_mut().eat();
-            if asm.lexer_mut().peek()? == IDENT && asm.lexer().string.eq_ignore_ascii_case("SP") {
+            if asm.lexer_mut().peek()? == IDENT && asm.lexer().string().eq_ignore_ascii_case("SP") {
                 let (_, opcode) =
                     op.1.iter()
                         .find(|(mode, _)| *mode == IND_SP)
@@ -737,8 +821,8 @@ fn operand<R: Read + Seek>(asm: &mut Asm<R>, op: &Op) -> io::Result<()> {
     Ok(())
 }
 
-struct Asm<R> {
-    lexers: Vec<Lexer<R>>,
+struct Asm {
+    lexers: Vec<Box<dyn TokenSrc>>,
     output: Box<dyn Write>,
     pc: u16,
     pc_end: bool,
@@ -748,12 +832,13 @@ struct Asm<R> {
     outer_label: String,
     emit: bool,
     bss_mode: bool,
+    macros: Vec<Macro>,
 }
 
-impl<R: Read + Seek> Asm<R> {
-    fn new(lexer: Lexer<R>, output: Box<dyn Write>) -> Self {
+impl Asm {
+    fn new<R: Read + Seek + 'static>(lexer: Lexer<R>, output: Box<dyn Write>) -> Self {
         Self {
-            lexers: vec![lexer],
+            lexers: vec![Box::new(lexer)],
             output,
             pc: 0,
             pc_end: false,
@@ -763,41 +848,33 @@ impl<R: Read + Seek> Asm<R> {
             outer_label: String::new(),
             emit: false,
             bss_mode: false,
+            macros: Vec::new(),
         }
     }
 
-    fn rewind(self) -> io::Result<Self> {
-        let Self {
-            mut lexers,
-            output,
-            syms,
-            ..
-        } = self;
-        let lexer = lexers.pop().unwrap().rewind()?;
-        Ok(Self {
-            lexers: vec![lexer],
-            output,
-            pc: 0,
-            pc_end: false,
-            bss: 0,
-            bss_end: false,
-            syms,
-            outer_label: String::new(),
-            emit: true,
-            bss_mode: false,
-        })
+    fn rewind(&mut self) -> io::Result<()> {
+        self.lexers.last_mut().unwrap().rewind()?;
+        self.pc = 0;
+        self.pc_end = false;
+        self.bss = 0;
+        self.bss_end = false;
+        self.outer_label.clear();
+        self.emit = true;
+        self.bss_mode = false;
+        self.macros.clear();
+        Ok(())
     }
 
     fn write(&mut self, bytes: &[u8]) -> io::Result<()> {
         self.output.write_all(bytes)
     }
 
-    fn lexer(&self) -> &Lexer<R> {
-        self.lexers.last().unwrap()
+    fn lexer(&self) -> &dyn TokenSrc {
+        self.lexers.last().unwrap().as_ref()
     }
 
-    fn lexer_mut(&mut self) -> &mut Lexer<R> {
-        self.lexers.last_mut().unwrap()
+    fn lexer_mut(&mut self) -> &mut dyn TokenSrc {
+        self.lexers.last_mut().unwrap().as_mut()
     }
 
     fn pc(&self) -> u16 {
@@ -850,21 +927,21 @@ impl<R: Read + Seek> Asm<R> {
     }
 }
 
-fn const_word<R: Read + Seek>(asm: &mut Asm<R>, expr: i32) -> io::Result<u16> {
+fn const_word(asm: &mut Asm, expr: i32) -> io::Result<u16> {
     if (expr as u32) > (u16::MAX as u32) {
         return Err(asm.lexer().err("expression too large to fit in word"));
     }
     Ok(expr as u16)
 }
 
-fn const_byte<R: Read + Seek>(asm: &mut Asm<R>, expr: i32) -> io::Result<u8> {
+fn const_byte(asm: &mut Asm, expr: i32) -> io::Result<u8> {
     if (expr as u32) > (u8::MAX as u32) {
         return Err(asm.lexer().err("expression too large to fit in byte"));
     }
     Ok(expr as u8)
 }
 
-fn const_short_branch<R: Read + Seek>(asm: &mut Asm<R>, expr: i32) -> io::Result<u8> {
+fn const_short_branch(asm: &mut Asm, expr: i32) -> io::Result<u8> {
     let branch = expr - (asm.pc() as u32 as i32);
     if (branch < (i8::MIN as i32)) || (branch > (i8::MAX as i32)) {
         return Err(asm.lexer().err("branch distance too far"));
@@ -872,7 +949,7 @@ fn const_short_branch<R: Read + Seek>(asm: &mut Asm<R>, expr: i32) -> io::Result
     Ok(branch as i8 as u8)
 }
 
-fn const_long_branch<R: Read + Seek>(asm: &mut Asm<R>, expr: i32) -> io::Result<u16> {
+fn const_long_branch(asm: &mut Asm, expr: i32) -> io::Result<u16> {
     let branch = expr - (asm.pc() as u32 as i32);
     if (branch < (i16::MIN as i32)) || (branch > (i16::MAX as i32)) {
         return Err(asm.lexer().err("branch distance too far"));
@@ -880,7 +957,7 @@ fn const_long_branch<R: Read + Seek>(asm: &mut Asm<R>, expr: i32) -> io::Result<
     Ok(branch as i16 as u16)
 }
 
-fn end_of_line<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
+fn end_of_line(asm: &mut Asm) -> io::Result<()> {
     let t = asm.lexer_mut().peek()?;
     match t {
         NEWLINE => {
@@ -895,18 +972,15 @@ fn end_of_line<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
             Ok(())
         }
 
-        _ => {
-            dbg!(t);
-            Err(asm.lexer().err("unexpected garbage"))
-        }
+        _ => Err(asm.lexer().err("unexpected garbage")),
     }
 }
 
-fn const_expr<R: Read + Seek>(asm: &mut Asm<R>, expr: Option<i32>) -> io::Result<i32> {
+fn const_expr(asm: &mut Asm, expr: Option<i32>) -> io::Result<i32> {
     expr.ok_or_else(|| asm.lexer().err("expression cannot be resolved"))
 }
 
-fn expect<R: Read + Seek>(asm: &mut Asm<R>, t: Token) -> io::Result<()> {
+fn expect(asm: &mut Asm, t: Token) -> io::Result<()> {
     if asm.lexer_mut().peek()? != t {
         return Err(asm.lexer().err("unexpected garbage"));
     }
@@ -995,7 +1069,7 @@ fn push_and_apply(values: &mut Vec<i32>, operators: &mut Vec<&'static str>, op: 
     operators.push(op);
 }
 
-fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
+fn expr(asm: &mut Asm) -> io::Result<Option<i32>> {
     let mut values = Vec::new();
     let mut operators = Vec::new();
     let mut seen_value = false;
@@ -1065,7 +1139,7 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
             if seen_value {
                 return Err(asm.lexer().err("expected operator"));
             }
-            values.push(asm.lexer().number);
+            values.push(asm.lexer().number());
             seen_value = true;
             continue;
         }
@@ -1104,14 +1178,16 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
         }
         if asm.lexer_mut().peek()? == IDENT {
             // apply outer label
-            if asm.lexer().string.starts_with(".") {
-                asm.lexer_mut().string = format!("{}{}", asm.outer_label, asm.lexer().string);
+            if asm.lexer().string().starts_with(".") {
+                // todo: remove clone
+                let outer_label = asm.outer_label.clone();
+                asm.lexer_mut().prepend_string(&outer_label);
             }
 
             if let Some(sym) = asm
                 .syms
                 .iter()
-                .find(|sym| sym.0.eq_ignore_ascii_case(&asm.lexer().string))
+                .find(|sym| sym.0.eq_ignore_ascii_case(&asm.lexer().string()))
                 .cloned()
             {
                 asm.lexer_mut().eat();
@@ -1121,7 +1197,7 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
                 values.push(sym.1);
                 seen_value = true;
                 continue;
-            } else if asm.lexer().string.eq_ignore_ascii_case("mod") {
+            } else if asm.lexer().string().eq_ignore_ascii_case("mod") {
                 asm.lexer_mut().eat();
                 if !seen_value {
                     return Err(asm.lexer().err("expected value"));
@@ -1129,7 +1205,7 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
                 push_and_apply(&mut values, &mut operators, "mod");
                 seen_value = false;
                 continue;
-            } else if asm.lexer().string.eq_ignore_ascii_case("asl") {
+            } else if asm.lexer().string().eq_ignore_ascii_case("asl") {
                 asm.lexer_mut().eat();
                 if !seen_value {
                     return Err(asm.lexer().err("expected value"));
@@ -1137,7 +1213,7 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
                 push_and_apply(&mut values, &mut operators, "asl");
                 seen_value = false;
                 continue;
-            } else if asm.lexer().string.eq_ignore_ascii_case("lsr") {
+            } else if asm.lexer().string().eq_ignore_ascii_case("lsr") {
                 asm.lexer_mut().eat();
                 if !seen_value {
                     return Err(asm.lexer().err("expected value"));
@@ -1145,7 +1221,7 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
                 push_and_apply(&mut values, &mut operators, "lsr");
                 seen_value = false;
                 continue;
-            } else if asm.lexer().string.eq_ignore_ascii_case("asr") {
+            } else if asm.lexer().string().eq_ignore_ascii_case("asr") {
                 asm.lexer_mut().eat();
                 if !seen_value {
                     return Err(asm.lexer().err("expected value"));
@@ -1153,7 +1229,7 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
                 push_and_apply(&mut values, &mut operators, "asr");
                 seen_value = false;
                 continue;
-            } else if asm.lexer().string.eq_ignore_ascii_case("xor") {
+            } else if asm.lexer().string().eq_ignore_ascii_case("xor") {
                 asm.lexer_mut().eat();
                 if !seen_value {
                     return Err(asm.lexer().err("expected value"));
@@ -1161,7 +1237,7 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
                 push_and_apply(&mut values, &mut operators, "xor");
                 seen_value = false;
                 continue;
-            } else if asm.lexer().string.eq_ignore_ascii_case("and") {
+            } else if asm.lexer().string().eq_ignore_ascii_case("and") {
                 asm.lexer_mut().eat();
                 if !seen_value {
                     return Err(asm.lexer().err("expected value"));
@@ -1169,7 +1245,7 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
                 push_and_apply(&mut values, &mut operators, "and");
                 seen_value = false;
                 continue;
-            } else if asm.lexer().string.eq_ignore_ascii_case("or") {
+            } else if asm.lexer().string().eq_ignore_ascii_case("or") {
                 asm.lexer_mut().eat();
                 if !seen_value {
                     return Err(asm.lexer().err("expected value"));
@@ -1177,7 +1253,7 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
                 push_and_apply(&mut values, &mut operators, "or");
                 seen_value = false;
                 continue;
-            } else if asm.lexer().string.eq_ignore_ascii_case("not") {
+            } else if asm.lexer().string().eq_ignore_ascii_case("not") {
                 asm.lexer_mut().eat();
                 if seen_value {
                     return Err(asm.lexer().err("expected value"));
@@ -1217,15 +1293,15 @@ fn expr<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<Option<i32>> {
     }
 }
 
-fn byt<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
+fn byt(asm: &mut Asm) -> io::Result<()> {
     loop {
         if asm.lexer_mut().peek()? == STRING {
             if asm.emit {
-                // todo: hacky, make method to write the current string buffer
-                let bytes = asm.lexer().string.clone();
-                asm.write(bytes.as_bytes())?;
+                // todo: remove clone
+                let string = asm.lexer().string().to_string();
+                asm.write(string.as_bytes())?;
             }
-            asm.add_pc(asm.lexer().string.len() as u16)?;
+            asm.add_pc(asm.lexer().string().len() as u16)?;
             asm.lexer_mut().eat();
         } else {
             let expr = expr(asm)?;
@@ -1245,7 +1321,7 @@ fn byt<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
     Ok(())
 }
 
-fn wrd<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
+fn wrd(asm: &mut Asm) -> io::Result<()> {
     loop {
         let expr = expr(asm)?;
         if asm.emit {
@@ -1263,7 +1339,7 @@ fn wrd<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
     Ok(())
 }
 
-fn pad<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
+fn pad(asm: &mut Asm) -> io::Result<()> {
     let expr = expr(asm)?;
     let expr = const_expr(asm, expr)?;
     let word = const_word(asm, expr)?;
@@ -1277,7 +1353,7 @@ fn pad<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
     Ok(())
 }
 
-fn adj<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
+fn adj(asm: &mut Asm) -> io::Result<()> {
     let expr = expr(asm)?;
     let expr = const_expr(asm, expr)?;
     let word = const_word(asm, expr)?;
@@ -1292,31 +1368,94 @@ fn adj<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
     Ok(())
 }
 
-fn bss<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
+fn bss(asm: &mut Asm) -> io::Result<()> {
     asm.bss_mode = true;
     end_of_line(asm)?;
     Ok(())
 }
 
-fn txt<R: Read + Seek>(asm: &mut Asm<R>) -> io::Result<()> {
+fn txt(asm: &mut Asm) -> io::Result<()> {
     asm.bss_mode = false;
     end_of_line(asm)?;
     Ok(())
 }
 
-fn inf(asm: &mut Asm<File>) -> io::Result<()> {
+fn inf(asm: &mut Asm) -> io::Result<()> {
     if asm.lexer_mut().peek()? != STRING {
-        return Err(asm.lexer_mut().err("expected file name"));
+        return Err(asm.lexer().err("expected file name"));
     }
-    let file = File::open(&asm.lexer().string)?;
+    let file = File::open(&asm.lexer().string())?;
     asm.lexer_mut().eat();
     let reader = Reader::new(file);
     let lexer = Lexer::new(reader);
-    asm.lexers.push(lexer);
+    asm.lexers.push(Box::new(lexer));
     Ok(())
 }
 
-type POp = (&'static str, fn(&mut Asm<File>) -> io::Result<()>);
+fn mac(asm: &mut Asm, name: String) -> io::Result<()> {
+    end_of_line(asm)?;
+    let mut tokens = Vec::new();
+    let mut strings = Vec::new();
+    loop {
+        if (asm.lexer_mut().peek()? == IDENT) && asm.lexer().string().eq_ignore_ascii_case("EMC") {
+            asm.lexer_mut().eat();
+            tokens.push(MacroTokenOrArgument::Token(MacroToken {
+                inner: EOF,
+                string_index: 0,
+                number: 0,
+                line: asm.lexer().line(),
+            }));
+            break;
+        }
+        match asm.lexer_mut().peek()? {
+            EOF => return Err(asm.lexer().err("unexpected end of file"))?,
+            tok @ (IDENT | STRING) => {
+                tokens.push(MacroTokenOrArgument::Token(MacroToken {
+                    inner: tok,
+                    string_index: strings.len(),
+                    number: 0,
+                    line: asm.lexer().line(),
+                }));
+                strings.push(asm.lexer().string().to_string());
+            }
+            NUMBER => {
+                tokens.push(MacroTokenOrArgument::Token(MacroToken {
+                    inner: NUMBER,
+                    string_index: 0,
+                    number: asm.lexer().number(),
+                    line: asm.lexer().line(),
+                }));
+            }
+            ARGUMENT => {
+                let index = asm.lexer().number();
+                if index < 1 {
+                    return Err(asm
+                        .lexer()
+                        .err("macro argument index must be greater than 0"))?;
+                }
+                tokens.push(MacroTokenOrArgument::Argument {
+                    index: (index as usize) - 1,
+                    line: asm.lexer().line(),
+                });
+            }
+            tok => tokens.push(MacroTokenOrArgument::Token(MacroToken {
+                inner: tok,
+                string_index: 0,
+                number: 0,
+                line: asm.lexer().line(),
+            })),
+        }
+        asm.lexer_mut().eat();
+    }
+    asm.macros.push(Macro {
+        name,
+        tokens,
+        strings,
+    });
+    Ok(())
+}
+
+type POp = (&'static str, fn(&mut Asm) -> io::Result<()>);
 
 #[rustfmt::skip]
 const POPS: &[POp] = &[
@@ -1327,8 +1466,7 @@ const POPS: &[POp] = &[
     ("BSS", bss),
     ("TXT", txt),
     ("INF", inf),
-//    ("DEF", def),
-//    ("END", end),
+    //("IFF", iff),
 ];
 
 type Token = u16;
@@ -1353,6 +1491,25 @@ const EOF: Token = 0x8000;
 const IDENT: Token = 0x8001;
 const NUMBER: Token = 0x8002;
 const STRING: Token = 0x8003;
+const ARGUMENT: Token = 0x8004;
+
+trait TokenSrc {
+    fn rewind(&mut self) -> io::Result<()>;
+
+    fn err(&self, msg: &str) -> io::Error;
+
+    fn peek(&mut self) -> io::Result<Token>;
+
+    fn eat(&mut self);
+
+    fn string(&self) -> &str;
+
+    fn prepend_string(&mut self, string: &str);
+
+    fn number(&self) -> i32;
+
+    fn line(&self) -> usize;
+}
 
 struct Lexer<R> {
     inner: Reader<R>,
@@ -1372,26 +1529,20 @@ impl<R: Read + Seek> Lexer<R> {
             line: 1,
         }
     }
+}
 
-    fn rewind(self) -> io::Result<Self> {
-        let Self { inner, .. } = self;
-        Ok(Self {
-            inner: inner.rewind()?,
-            string: String::new(),
-            number: 0,
-            stash: None,
-            line: 1,
-        })
+impl<R: Read + Seek> TokenSrc for Lexer<R> {
+    fn rewind(&mut self) -> io::Result<()> {
+        self.inner.rewind()?;
+        self.string.clear();
+        self.number = 0;
+        self.stash = None;
+        self.line = 1;
+        Ok(())
     }
 
-    fn err<E>(&self, e: E) -> io::Error
-    where
-        E: Into<Box<dyn Error + Send + Sync>>,
-    {
-        io::Error::new(
-            ErrorKind::InvalidData,
-            format!("{}: {}", self.line, e.into()),
-        )
+    fn err(&self, msg: &str) -> io::Error {
+        io::Error::new(ErrorKind::InvalidData, format!("{}: {msg}", self.line))
     }
 
     fn peek(&mut self) -> io::Result<Token> {
@@ -1414,6 +1565,22 @@ impl<R: Read + Seek> Lexer<R> {
         }
 
         if let Some(c) = self.inner.peek()? {
+            // argument
+            if c == b'?' {
+                self.inner.eat();
+                while let Some(c) = self.inner.peek()? {
+                    if !c.is_ascii_digit() {
+                        break;
+                    }
+                    self.string.push(c as char);
+                    self.inner.eat();
+                }
+                self.number =
+                    i32::from_str_radix(&self.string, 10).map_err(|e| self.err(&e.to_string()))?;
+                self.stash = Some(ARGUMENT);
+                return Ok(ARGUMENT);
+            }
+
             // number
             if c.is_ascii_digit() || c == b'$' || c == b'%' {
                 let radix = match c {
@@ -1434,7 +1601,8 @@ impl<R: Read + Seek> Lexer<R> {
                     self.string.push(c as char);
                     self.inner.eat();
                 }
-                self.number = i32::from_str_radix(&self.string, radix).map_err(|e| self.err(e))?;
+                self.number = i32::from_str_radix(&self.string, radix)
+                    .map_err(|e| self.err(&e.to_string()))?;
                 self.stash = Some(NUMBER);
                 return Ok(NUMBER);
             }
@@ -1496,18 +1664,128 @@ impl<R: Read + Seek> Lexer<R> {
         Ok(EOF)
     }
 
-    fn eat(&mut self) -> Token {
+    fn eat(&mut self) {
         self.string.clear();
-        match self.stash.take() {
-            Some(NEWLINE) => {
-                self.line += 1;
-                NEWLINE
+        if let Some(NEWLINE) = self.stash.take() {
+            self.line += 1;
+        }
+    }
+
+    fn string(&self) -> &str {
+        &self.string
+    }
+
+    fn prepend_string(&mut self, string: &str) {
+        self.string.insert_str(0, string);
+    }
+
+    fn number(&self) -> i32 {
+        self.number
+    }
+
+    fn line(&self) -> usize {
+        self.line
+    }
+}
+
+#[derive(Clone)]
+struct MacroToken {
+    inner: Token,
+    string_index: usize,
+    number: i32,
+    line: usize,
+}
+
+#[derive(Clone)]
+enum MacroTokenOrArgument {
+    Token(MacroToken),
+    Argument { index: usize, line: usize },
+}
+
+#[derive(Clone)]
+struct Macro {
+    name: String,
+    tokens: Vec<MacroTokenOrArgument>,
+    strings: Vec<String>,
+}
+
+struct MacroInvocation {
+    inner: Macro,
+    invocation_line: usize,
+    pos: usize,
+    string: String,
+    args: Vec<MacroToken>,
+    arg_strings: Vec<String>,
+}
+
+impl TokenSrc for MacroInvocation {
+    fn rewind(&mut self) -> io::Result<()> {
+        self.pos = 0;
+        Ok(())
+    }
+
+    fn err(&self, msg: &str) -> io::Error {
+        io::Error::new(
+            ErrorKind::InvalidData,
+            format!(
+                "{}:{}:{}: {msg}",
+                self.invocation_line,
+                self.inner.name,
+                match &self.inner.tokens[self.pos] {
+                    MacroTokenOrArgument::Token(tok) => tok.line,
+                    MacroTokenOrArgument::Argument { line, .. } => *line,
+                }
+            ),
+        )
+    }
+
+    fn peek(&mut self) -> io::Result<Token> {
+        match &self.inner.tokens[self.pos] {
+            MacroTokenOrArgument::Token(tok) if (tok.inner == STRING) || (tok.inner == IDENT) => {
+                self.string.clear();
+                // todo: remove clone
+                self.string = self.inner.strings[tok.string_index].clone();
+                Ok(tok.inner)
             }
-            Some(t) => t,
-            None => {
-                // once we hit EOF, it is forever
-                EOF
+            MacroTokenOrArgument::Token(tok) => Ok(tok.inner),
+            MacroTokenOrArgument::Argument { index, .. } => {
+                if *index >= self.args.len() {
+                    return Err(self.err("argument is undefined"));
+                }
+                let tok = &self.args[*index];
+                if (tok.inner == STRING) || (tok.inner == IDENT) {
+                    self.string.clear();
+                    // todo: remove clone
+                    self.string = self.arg_strings[self.args[*index].string_index].clone();
+                }
+                Ok(tok.inner)
             }
+        }
+    }
+
+    fn eat(&mut self) {
+        self.pos += 1;
+    }
+
+    fn string(&self) -> &str {
+        &self.string
+    }
+
+    fn prepend_string(&mut self, string: &str) {
+        self.string.insert_str(0, string);
+    }
+
+    fn number(&self) -> i32 {
+        match &self.inner.tokens[self.pos] {
+            MacroTokenOrArgument::Token(tok) => tok.number,
+            MacroTokenOrArgument::Argument { index, .. } => self.args[*index].number,
+        }
+    }
+
+    fn line(&self) -> usize {
+        match &self.inner.tokens[self.pos] {
+            MacroTokenOrArgument::Token(tok) => tok.line,
+            MacroTokenOrArgument::Argument { index, .. } => self.args[*index].line,
         }
     }
 }
@@ -1522,10 +1800,10 @@ impl<R: Read + Seek> Reader<R> {
         Self { inner, stash: None }
     }
 
-    fn rewind(self) -> io::Result<Self> {
-        let Self { mut inner, .. } = self;
-        inner.rewind()?;
-        Ok(Self { inner, stash: None })
+    fn rewind(&mut self) -> io::Result<()> {
+        self.inner.rewind()?;
+        self.stash = None;
+        Ok(())
     }
 
     fn peek(&mut self) -> io::Result<Option<u8>> {
