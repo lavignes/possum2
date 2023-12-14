@@ -8,8 +8,8 @@ use std::{
 use crate::bus::{Bus, BusDevice};
 
 const NUM_TRACKS: usize = 80;
-const NUM_SECTORS: usize = 9;
-const SECTOR_SIZE: usize = 512;
+const NUM_SECTORS: usize = 16;
+const SECTOR_SIZE: usize = 256;
 
 enum StatusFlags {}
 
@@ -150,6 +150,7 @@ impl<T: Read + Write + Seek> BusDevice for Fdc<T> {
                     self.track += 1;
                     self.track_latch = self.track;
                 } else {
+                    self.state = State::Idle;
                     self.status &= !StatusFlags::BUSY;
                     self.irq = true;
                 }
@@ -229,9 +230,22 @@ impl<T: Read + Write + Seek> BusDevice for Fdc<T> {
                         self.sector_count -= 1;
                         self.sector += 1;
                     } else {
+                        self.state = State::Idle;
                         self.status &= !StatusFlags::BUSY;
                         self.irq = true;
                     }
+                }
+            }
+
+            State::ReadAddress => {
+                if self.buf.is_empty() {
+                    self.state = State::Idle;
+                    self.status &= !StatusFlags::BUSY;
+                    self.irq = true;
+                }
+                if (self.status & StatusFlags::DATA_REQUEST) == 0 {
+                    self.data = self.buf.pop_front().unwrap();
+                    self.status |= StatusFlags::DATA_REQUEST;
                 }
             }
 
@@ -310,6 +324,7 @@ impl<T: Read + Write + Seek> BusDevice for Fdc<T> {
                         }
                     }
                     4 => {
+                        // todo: if disk is not READY, we should interrupt
                         self.state = State::ReadSector;
                         self.status |= StatusFlags::BUSY | StatusFlags::HEAD_LOADED;
                         self.buf.clear();
@@ -323,6 +338,7 @@ impl<T: Read + Write + Seek> BusDevice for Fdc<T> {
                         }
                     }
                     5 => {
+                        // todo: if disk is not READY, we should interrupt
                         self.state = State::WriteSector;
                         self.status |= StatusFlags::BUSY | StatusFlags::HEAD_LOADED;
                         self.buf.clear();
@@ -338,7 +354,21 @@ impl<T: Read + Write + Seek> BusDevice for Fdc<T> {
                     6 => {
                         if (data & 0b0001_0000) == 0 {
                             self.state = State::ReadAddress;
-                            todo!();
+                            self.status |= StatusFlags::BUSY;
+                            self.buf.clear();
+                            let side = if (self.command & CommandFlags::SIDE_SELECT) == 0 {
+                                0
+                            } else {
+                                1
+                            };
+                            self.buf.extend(&[
+                                self.track,
+                                side,
+                                self.sector,
+                                SECTOR_SIZE as u8,
+                                0,
+                                0,
+                            ]);
                         } else {
                             // Forcing Interrupt
                             todo!();
@@ -352,7 +382,7 @@ impl<T: Read + Write + Seek> BusDevice for Fdc<T> {
             1 => self.track_latch = data,
 
             2 => {
-                if data > 8 {
+                if data >= (NUM_SECTORS as u8) {
                     todo!("implement errors of not finding correct track/sector number");
                 }
                 self.sector = data;

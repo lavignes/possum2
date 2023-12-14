@@ -4,7 +4,7 @@ use std::{
     io::{self, ErrorKind, Read, Seek, Write},
     path::PathBuf,
     process::ExitCode,
-    str,
+    str::{self, FromStr},
 };
 
 use clap::Parser;
@@ -22,6 +22,23 @@ struct Args {
     /// Symbol file
     #[arg(short, long)]
     sym: Option<PathBuf>,
+
+    /// Pre-defined symbols (repeatable)
+    #[arg(short = 'D', value_name="KEY1=val", value_parser = parse_defines::<String, i32>)]
+    defines: Vec<(String, i32)>,
+}
+
+fn parse_defines<T, U>(s: &str) -> Result<(T, U), Box<dyn Error + Send + Sync + 'static>>
+where
+    T: FromStr,
+    T::Err: Error + Send + Sync + 'static,
+    U: FromStr,
+    U::Err: Error + Send + Sync + 'static,
+{
+    let pos = s
+        .find('=')
+        .ok_or_else(|| format!("invalid SYMBOL=value: no `=` found in `{s}`"))?;
+    Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
 }
 
 fn main() -> ExitCode {
@@ -51,6 +68,10 @@ fn main_real() -> Result<(), Box<dyn Error>> {
     };
 
     let mut asm = Asm::new(lexer, output);
+    for (k, v) in args.defines {
+        asm.syms.push((k.clone(), v));
+    }
+
     eprint!("pass1: ");
     pass(&mut asm)?;
     eprintln!("ok");
@@ -236,7 +257,7 @@ fn pass(asm: &mut Asm) -> Result<(), Box<dyn Error>> {
         }
 
         if asm.bss_mode {
-            // only pad, adj, txt, and inf work in bss
+            // only pad, adj, txt, inf, iff, ifd, and end work in bss
             if asm.lexer_mut().peek()? == IDENT && asm.lexer().string().eq_ignore_ascii_case("PAD")
             {
                 asm.lexer_mut().eat();
@@ -259,6 +280,24 @@ fn pass(asm: &mut Asm) -> Result<(), Box<dyn Error>> {
             {
                 asm.lexer_mut().eat();
                 inf(asm)?;
+                continue;
+            }
+            if asm.lexer_mut().peek()? == IDENT && asm.lexer().string().eq_ignore_ascii_case("IFF")
+            {
+                asm.lexer_mut().eat();
+                iff(asm)?;
+                continue;
+            }
+            if asm.lexer_mut().peek()? == IDENT && asm.lexer().string().eq_ignore_ascii_case("IFD")
+            {
+                asm.lexer_mut().eat();
+                ifd(asm)?;
+                continue;
+            }
+            if asm.lexer_mut().peek()? == IDENT && asm.lexer().string().eq_ignore_ascii_case("END")
+            {
+                asm.lexer_mut().eat();
+                end(asm)?;
                 continue;
             }
         } else {
@@ -833,6 +872,7 @@ struct Asm {
     emit: bool,
     bss_mode: bool,
     macros: Vec<Macro>,
+    if_level: usize,
 }
 
 impl Asm {
@@ -849,6 +889,7 @@ impl Asm {
             emit: false,
             bss_mode: false,
             macros: Vec::new(),
+            if_level: 0,
         }
     }
 
@@ -862,6 +903,7 @@ impl Asm {
         self.emit = true;
         self.bss_mode = false;
         self.macros.clear();
+        self.if_level = 0;
         Ok(())
     }
 
@@ -1396,16 +1438,27 @@ fn mac(asm: &mut Asm, name: String) -> io::Result<()> {
     end_of_line(asm)?;
     let mut tokens = Vec::new();
     let mut strings = Vec::new();
+    let mut if_level = 0;
     loop {
-        if (asm.lexer_mut().peek()? == IDENT) && asm.lexer().string().eq_ignore_ascii_case("EMC") {
-            asm.lexer_mut().eat();
-            tokens.push(MacroTokenOrArgument::Token(MacroToken {
-                inner: EOF,
-                string_index: 0,
-                number: 0,
-                line: asm.lexer().line(),
-            }));
-            break;
+        if asm.lexer_mut().peek()? == IDENT {
+            if asm.lexer().string().eq_ignore_ascii_case("IFF")
+                || asm.lexer().string().eq_ignore_ascii_case("IFD")
+                || asm.lexer().string().eq_ignore_ascii_case("MAC")
+            {
+                if_level += 1;
+            } else if asm.lexer().string().eq_ignore_ascii_case("END") {
+                if if_level == 0 {
+                    asm.lexer_mut().eat();
+                    tokens.push(MacroTokenOrArgument::Token(MacroToken {
+                        inner: EOF,
+                        string_index: 0,
+                        number: 0,
+                        line: asm.lexer().line(),
+                    }));
+                    break;
+                }
+                if_level -= 1;
+            }
         }
         match asm.lexer_mut().peek()? {
             EOF => return Err(asm.lexer().err("unexpected end of file"))?,
@@ -1455,6 +1508,72 @@ fn mac(asm: &mut Asm, name: String) -> io::Result<()> {
     Ok(())
 }
 
+fn iff(asm: &mut Asm) -> io::Result<()> {
+    let expr = expr(asm)?;
+    let expr = const_expr(asm, expr)?;
+    end_of_line(asm)?;
+    if expr == 0 {
+        let mut if_level = 0;
+        loop {
+            if asm.lexer_mut().peek()? == IDENT {
+                if asm.lexer().string().eq_ignore_ascii_case("IFF")
+                    || asm.lexer().string().eq_ignore_ascii_case("IFD")
+                    || asm.lexer().string().eq_ignore_ascii_case("MAC")
+                {
+                    if_level += 1;
+                } else if asm.lexer().string().eq_ignore_ascii_case("END") {
+                    if if_level == 0 {
+                        asm.lexer_mut().eat();
+                        end_of_line(asm)?;
+                        return Ok(());
+                    }
+                    if_level -= 1;
+                }
+            }
+            asm.lexer_mut().eat();
+        }
+    }
+    asm.if_level += 1;
+    Ok(())
+}
+
+fn ifd(asm: &mut Asm) -> io::Result<()> {
+    let expr = expr(asm)?;
+    end_of_line(asm)?;
+    if expr.is_some() {
+        let mut if_level = 0;
+        loop {
+            if asm.lexer_mut().peek()? == IDENT {
+                if asm.lexer().string().eq_ignore_ascii_case("IFF")
+                    || asm.lexer().string().eq_ignore_ascii_case("IFD")
+                    || asm.lexer().string().eq_ignore_ascii_case("MAC")
+                {
+                    if_level += 1;
+                } else if asm.lexer().string().eq_ignore_ascii_case("END") {
+                    if if_level == 0 {
+                        asm.lexer_mut().eat();
+                        end_of_line(asm)?;
+                        return Ok(());
+                    }
+                    if_level -= 1;
+                }
+            }
+            asm.lexer_mut().eat();
+        }
+    }
+    asm.if_level += 1;
+    Ok(())
+}
+
+fn end(asm: &mut Asm) -> io::Result<()> {
+    if asm.if_level == 0 {
+        return Err(asm.lexer().err("unexpected end"));
+    }
+    end_of_line(asm)?;
+    asm.if_level -= 1;
+    Ok(())
+}
+
 type POp = (&'static str, fn(&mut Asm) -> io::Result<()>);
 
 #[rustfmt::skip]
@@ -1466,7 +1585,9 @@ const POPS: &[POp] = &[
     ("BSS", bss),
     ("TXT", txt),
     ("INF", inf),
-    //("IFF", iff),
+    ("IFF", iff),
+    ("IFD", ifd),
+    ("END", end),
 ];
 
 type Token = u16;

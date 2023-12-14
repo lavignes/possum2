@@ -2,8 +2,7 @@
 
 LOOP		mac
 		bru *
-		byt "Hello World"
-		emc
+		end
 
 SER0_DATA	equ $F010
 SER0_STATUS	equ $F011
