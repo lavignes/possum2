@@ -1,7 +1,21 @@
 ; vim: ft=pasm sw=8 ts=8 cc=80 noet
 
-LOOP		mac
-		bru *
+PUSH_ALL	mac
+		pha
+		tba
+		pha
+		phx
+		phy
+		phz
+		end
+
+PULL_ALL	mac
+		plz
+		ply
+		plx
+		pla
+		tab
+		pla
 		end
 
 SER0_DATA	equ $F010
@@ -14,6 +28,7 @@ INT_LATCH	equ $F0FF
 
 		bss
 *		equ $0000
+ksp		pad 2
 ptr0		pad 2
 
 		txt
@@ -24,9 +39,9 @@ MemSet		dey
 		bne MemSet
 		rts
 
-Reset		lda BANK0
-		sta ptr0
-		lda BANK0+1
+Reset		lda #<BANK0
+		sta ptr0+0
+		lda #>BANK0
 		sta ptr0+1
 		lda #0
 		ldy #15
@@ -36,7 +51,7 @@ Reset		lda BANK0
 		lda #$09		; rx interrupt enable, turn on
 		sta SER0_CMD
 		cli
-		LOOP
+		bru *
 
 Ser0Tx		pha
 .wait		lda SER0_STATUS
@@ -52,16 +67,40 @@ Ser0Rx		lda SER0_STATUS
 		lda SER0_DATA
 		rts
 
-Irq		pha			; store a and x on caller stack
-		phx
+Irq
+		PUSH_ALL		; store regs on user stack
 
-		ldx BANK0
+		ldy #6			; read user flags off user stack
+		lda (0,sp),y		; and save them in B for a while
+		tab
+
+		tsx			; load user SP in XY
+		tsy
+
+		ldz BANK0		; save user bank 0 in Z
 		lda #0
-		sta BANK0		; switched to ch 0
-		phx			; store previous bank on k stack
+		sta BANK0		; switch to kernel bank 0
 
-		; todo: need to check if BRK flag is set
-		;   and go to a special BRK handler
+		txa			; restore kernel SP
+		ldx ksp+0
+		txs
+		tax
+		tya
+		ldy ksp+1
+		tys
+		tay
+
+		phx			; store user SP on kernel stack
+		phy
+		phz			; store user bank 0 on kernel stack
+
+		;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+		; finally ready to handle interrupts!
+		;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+		tba			; check for BRK user flag
+		and #%00010000
+		bne BrkIrq
 
 		ldx INT_LATCH		; value is multiple of 2
 		jmp (.table,x)
@@ -73,10 +112,15 @@ Irq		pha			; store a and x on caller stack
 		wrd Ser0Irq
 		wrd Ser1Irq
 
-IrqRet		pla
-		sta BANK0		; restore bank 0
-		plx			; restore a and x from caller stack
-		pla
+IrqRet		pla			; load user SP into XY and
+		ply			; restore user bank 0
+		plx
+		sta BANK0
+
+		txs			; restore user SP
+		tys
+
+		PULL_ALL		; restore regs from user stack
 		rti
 
 Fdc0Drq		bru IrqRet
@@ -87,6 +131,7 @@ Ser0Irq		bsr Ser0Rx
 		bsr Ser0Tx
 		bru IrqRet
 Ser1Irq		bru IrqRet
+BrkIrq		bru IrqRet
 
 Nmi		rti
 
