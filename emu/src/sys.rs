@@ -114,10 +114,17 @@ impl Mem {
     }
 
     fn write(&mut self, addr: u16, data: u8) {
+        // get the high nibble to determine which 4K "chapter" we are in
         let chapter = ((addr & 0xF000) >> 12) as usize;
         let base = chapter * (0x1000 + self.bank_select[chapter]);
         let offset = (addr & 0x0FFF) as usize;
         self.inner[base + offset] = data;
+    }
+
+    pub fn bank(&self, addr: u16) -> usize {
+        // get the high nibble to determine which 4K "chapter" we are in
+        let chapter = ((addr & 0xF000) >> 12) as usize;
+        self.bank_select[chapter]
     }
 }
 

@@ -84,7 +84,9 @@ impl Cpu {
             self.sp[0] = self.sp[0].wrapping_sub(1);
             u16::from_le_bytes(self.sp)
         } else {
-            u16::from_le_bytes(self.sp).wrapping_sub(1)
+            let addr = u16::from_le_bytes(self.sp).wrapping_sub(1);
+            self.sp = addr.to_le_bytes();
+            addr
         };
         bus.write(addr, data)
     }
@@ -122,46 +124,44 @@ impl Cpu {
         self.p = preserve_be | value;
     }
 
-    // (BP,X)
-    fn addr_bp_indirect_x<B: Bus>(&mut self, bus: &mut B) -> u16 {
+    // (B,X)
+    fn addr_b_indirect_x<B: Bus>(&mut self, bus: &mut B) -> u16 {
         let ptr = self.fetch(bus).wrapping_add(self.x);
         let lo = bus.read(u16::from_le_bytes([ptr, self.b]));
         let hi = bus.read(u16::from_le_bytes([ptr.wrapping_add(1), self.b]));
         u16::from_le_bytes([lo, hi])
     }
 
-    // (BP),Y
-    fn addr_bp_indirect_y<B: Bus>(&mut self, bus: &mut B) -> u16 {
+    // (B),Y
+    fn addr_b_indirect_y<B: Bus>(&mut self, bus: &mut B) -> u16 {
         let ptr = self.fetch(bus);
         let lo = bus.read(u16::from_le_bytes([ptr, self.b]));
         let hi = bus.read(u16::from_le_bytes([ptr.wrapping_add(1), self.b]));
-        u16::from_le_bytes([lo, hi])
-            .wrapping_add(self.y as u16) // good lord why carry?
-            .wrapping_add(if (self.p & Flags::CARRY) != 0 { 1 } else { 0 })
+        u16::from_le_bytes([lo, hi]).wrapping_add(self.y as u16)
     }
 
-    // (BP),Z
-    fn addr_bp_indirect_z<B: Bus>(&mut self, bus: &mut B) -> u16 {
+    // (B),Z
+    fn addr_b_indirect_z<B: Bus>(&mut self, bus: &mut B) -> u16 {
         let ptr = self.fetch(bus);
         let lo = bus.read(u16::from_le_bytes([ptr, self.b]));
         let hi = bus.read(u16::from_le_bytes([ptr.wrapping_add(1), self.b]));
         u16::from_le_bytes([lo, hi]).wrapping_add(self.z as u16)
     }
 
-    // BP,X
-    fn addr_bp_x<B: Bus>(&mut self, bus: &mut B) -> u16 {
+    // B,X
+    fn addr_b_x<B: Bus>(&mut self, bus: &mut B) -> u16 {
         let ptr = self.fetch(bus).wrapping_add(self.x);
         u16::from_le_bytes([ptr, self.b])
     }
 
-    // BP,Y
-    fn addr_bp_y<B: Bus>(&mut self, bus: &mut B) -> u16 {
+    // B,Y
+    fn addr_b_y<B: Bus>(&mut self, bus: &mut B) -> u16 {
         let ptr = self.fetch(bus).wrapping_add(self.y);
         u16::from_le_bytes([ptr, self.b])
     }
 
-    // BP
-    fn addr_bp<B: Bus>(&mut self, bus: &mut B) -> u16 {
+    // B
+    fn addr_b<B: Bus>(&mut self, bus: &mut B) -> u16 {
         u16::from_le_bytes([self.fetch(bus), self.b])
     }
 
@@ -180,9 +180,8 @@ impl Cpu {
 
     // (ABS,X)
     fn addr_abs_indirect_x<B: Bus>(&mut self, bus: &mut B) -> u16 {
-        let addr = u16::from_le_bytes([self.fetch(bus), self.fetch(bus)])
-            .wrapping_add(self.x as u16)
-            .wrapping_add(if (self.p & Flags::CARRY) != 0 { 1 } else { 0 });
+        let addr =
+            u16::from_le_bytes([self.fetch(bus), self.fetch(bus)]).wrapping_add(self.x as u16);
         let lo = bus.read(addr);
         let hi = bus.read(addr.wrapping_add(1));
         u16::from_le_bytes([lo, hi])
@@ -190,16 +189,12 @@ impl Cpu {
 
     // ABS,X
     fn addr_abs_x<B: Bus>(&mut self, bus: &mut B) -> u16 {
-        u16::from_le_bytes([self.fetch(bus), self.fetch(bus)])
-            .wrapping_add(self.x as u16)
-            .wrapping_add(if (self.p & Flags::CARRY) != 0 { 1 } else { 0 })
+        u16::from_le_bytes([self.fetch(bus), self.fetch(bus)]).wrapping_add(self.x as u16)
     }
 
     // ABS,Y
     fn addr_abs_y<B: Bus>(&mut self, bus: &mut B) -> u16 {
-        u16::from_le_bytes([self.fetch(bus), self.fetch(bus)])
-            .wrapping_add(self.y as u16)
-            .wrapping_add(if (self.p & Flags::CARRY) != 0 { 1 } else { 0 })
+        u16::from_le_bytes([self.fetch(bus), self.fetch(bus)]).wrapping_add(self.y as u16)
     }
 
     // (d,SP),Y
@@ -207,12 +202,16 @@ impl Cpu {
         let offset = self.fetch(bus);
         if (self.p & Flags::EXTEND_STACK_DISABLE) != 0 {
             let [lo, hi] = self.sp;
-            let lo = lo.wrapping_add(offset).wrapping_add(self.y);
-            u16::from_le_bytes([lo, hi])
+            let lo = lo.wrapping_add(offset);
+            let addr = u16::from_le_bytes([lo, hi]);
+            let lo = bus.read(addr);
+            let hi = bus.read(addr.wrapping_add(1));
+            u16::from_le_bytes([lo, hi]).wrapping_add(self.y as u16)
         } else {
-            u16::from_be_bytes(self.sp)
-                .wrapping_add(offset as u16)
-                .wrapping_add(self.y as u16)
+            let addr = u16::from_le_bytes(self.sp).wrapping_add(offset as u16);
+            let lo = bus.read(addr);
+            let hi = bus.read(addr.wrapping_add(1));
+            u16::from_le_bytes([lo, hi]).wrapping_add(self.y as u16)
         }
     }
 }
@@ -288,9 +287,9 @@ impl BusDevice for Cpu {
                 self.pc = [lo, hi];
             }
 
-            // ORA (BP,X)
+            // ORA (B,X)
             0x01 => {
-                let addr = self.addr_bp_indirect_x(bus);
+                let addr = self.addr_b_indirect_x(bus);
                 let data = bus.read(addr);
                 self.a |= data;
                 self.set_flag(Flags::NEGATIVE, (self.a & 0x80) != 0);
@@ -307,26 +306,26 @@ impl BusDevice for Cpu {
                 self.p |= Flags::EXTEND_STACK_DISABLE;
             }
 
-            // TSB BP
+            // TSB B
             0x04 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 bus.write(addr, self.a | data);
                 self.set_flag(Flags::ZERO, (self.a & data) == 0);
             }
 
-            // ORA BP
+            // ORA B
             0x05 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 self.a |= data;
                 self.set_flag(Flags::NEGATIVE, (self.a & 0x80) != 0);
                 self.set_flag(Flags::ZERO, self.a == 0);
             }
 
-            // ASL BP
+            // ASL B
             0x06 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let (data, carry) = data.overflowing_shl(1);
                 bus.write(addr, data);
@@ -335,9 +334,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, data == 0);
             }
 
-            // RMB 0,BP
+            // RMB 0,B
             0x07 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let data = data & !(1 << 0);
                 bus.write(addr, data);
@@ -400,9 +399,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, data == 0);
             }
 
-            // BBR 0,BP
+            // BBR 0,B
             0x0F => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let branch = self.fetch(bus) as i8;
                 let data = bus.read(addr);
                 if (data & (1 << 0)) == 0 {
@@ -422,18 +421,18 @@ impl BusDevice for Cpu {
                 }
             }
 
-            // ORA (BP),Y
+            // ORA (B),Y
             0x11 => {
-                let addr = self.addr_bp_indirect_y(bus);
+                let addr = self.addr_b_indirect_y(bus);
                 let data = bus.read(addr);
                 self.a |= data;
                 self.set_flag(Flags::NEGATIVE, (self.a & 0x80) != 0);
                 self.set_flag(Flags::ZERO, self.a == 0);
             }
 
-            // ORA (BP),Z
+            // ORA (B),Z
             0x12 => {
-                let addr = self.addr_bp_indirect_z(bus);
+                let addr = self.addr_b_indirect_z(bus);
                 let data = bus.read(addr);
                 self.a |= data;
                 self.set_flag(Flags::NEGATIVE, (self.a & 0x80) != 0);
@@ -452,26 +451,26 @@ impl BusDevice for Cpu {
                 }
             }
 
-            // TRB BP
+            // TRB B
             0x14 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 bus.write(addr, !self.a & data);
                 self.set_flag(Flags::ZERO, (self.a & data) == 0);
             }
 
-            // ORA BP,X
+            // ORA B,X
             0x15 => {
-                let addr = self.addr_bp_x(bus);
+                let addr = self.addr_b_x(bus);
                 let data = bus.read(addr);
                 self.a |= data;
                 self.set_flag(Flags::NEGATIVE, (self.a & 0x80) != 0);
                 self.set_flag(Flags::ZERO, self.a == 0);
             }
 
-            // ASL BP,X
+            // ASL B,X
             0x16 => {
-                let addr = self.addr_bp_x(bus);
+                let addr = self.addr_b_x(bus);
                 let data = bus.read(addr);
                 let (data, carry) = data.overflowing_shl(1);
                 bus.write(addr, data);
@@ -480,9 +479,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, data == 0);
             }
 
-            // RMB 1,BP
+            // RMB 1,B
             0x17 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let data = data & !(1 << 1);
                 bus.write(addr, data);
@@ -544,9 +543,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, data == 0);
             }
 
-            // BBR 1,BP
+            // BBR 1,B
             0x1F => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let branch = self.fetch(bus) as i8;
                 let data = bus.read(addr);
                 if (data & (1 << 1)) == 0 {
@@ -564,9 +563,9 @@ impl BusDevice for Cpu {
                 self.pc = addr.to_le_bytes();
             }
 
-            // AND (BP,X)
+            // AND (B,X)
             0x21 => {
-                let addr = self.addr_bp_indirect_x(bus);
+                let addr = self.addr_b_indirect_x(bus);
                 let data = bus.read(addr);
                 self.a &= data;
                 self.set_flag(Flags::NEGATIVE, (self.a & 0x80) != 0);
@@ -589,27 +588,27 @@ impl BusDevice for Cpu {
                 self.pc = addr.to_le_bytes();
             }
 
-            // BIT BP
+            // BIT B
             0x24 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 self.set_flag(Flags::NEGATIVE, (data & Flags::NEGATIVE) != 0);
                 self.set_flag(Flags::OVERFLOW, (data & Flags::OVERFLOW) != 0);
                 self.set_flag(Flags::ZERO, (self.a & data) == 0);
             }
 
-            // AND BP
+            // AND B
             0x25 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 self.a &= data;
                 self.set_flag(Flags::NEGATIVE, (self.a & 0x80) != 0);
                 self.set_flag(Flags::ZERO, self.a == 0);
             }
 
-            // ROL BP
+            // ROL B
             0x26 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let (result, carry) = data.overflowing_shl(1);
                 let result = result | (self.p & Flags::CARRY);
@@ -619,9 +618,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // RMB 2,BP
+            // RMB 2,B
             0x27 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let data = data & !(1 << 2);
                 bus.write(addr, data);
@@ -686,9 +685,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // BBR 2,BP
+            // BBR 2,B
             0x2F => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let branch = self.fetch(bus) as i8;
                 let data = bus.read(addr);
                 if (data & (1 << 2)) == 0 {
@@ -708,18 +707,18 @@ impl BusDevice for Cpu {
                 }
             }
 
-            // AND (BP),Y
+            // AND (B),Y
             0x31 => {
-                let addr = self.addr_bp_indirect_y(bus);
+                let addr = self.addr_b_indirect_y(bus);
                 let data = bus.read(addr);
                 self.a &= data;
                 self.set_flag(Flags::NEGATIVE, (self.a & 0x80) != 0);
                 self.set_flag(Flags::ZERO, self.a == 0);
             }
 
-            // AND (BP),Z
+            // AND (B),Z
             0x32 => {
-                let addr = self.addr_bp_indirect_z(bus);
+                let addr = self.addr_b_indirect_z(bus);
                 let data = bus.read(addr);
                 self.a &= data;
                 self.set_flag(Flags::NEGATIVE, (self.a & 0x80) != 0);
@@ -738,27 +737,27 @@ impl BusDevice for Cpu {
                 }
             }
 
-            // BIT BP,X
+            // BIT B,X
             0x34 => {
-                let addr = self.addr_bp_x(bus);
+                let addr = self.addr_b_x(bus);
                 let data = bus.read(addr);
                 self.set_flag(Flags::NEGATIVE, (data & Flags::NEGATIVE) != 0);
                 self.set_flag(Flags::OVERFLOW, (data & Flags::OVERFLOW) != 0);
                 self.set_flag(Flags::ZERO, (self.a & data) == 0);
             }
 
-            // AND BP,X
+            // AND B,X
             0x35 => {
-                let addr = self.addr_bp_x(bus);
+                let addr = self.addr_b_x(bus);
                 let data = bus.read(addr);
                 self.a &= data;
                 self.set_flag(Flags::NEGATIVE, (self.a & 0x80) != 0);
                 self.set_flag(Flags::ZERO, self.a == 0);
             }
 
-            // ROL BP,X
+            // ROL B,X
             0x36 => {
-                let addr = self.addr_bp_x(bus);
+                let addr = self.addr_b_x(bus);
                 let data = bus.read(addr);
                 let (result, carry) = data.overflowing_shl(1);
                 let result = result | (self.p & Flags::CARRY);
@@ -768,9 +767,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // RMB 3,BP
+            // RMB 3,B
             0x37 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let data = data & !(1 << 3);
                 bus.write(addr, data);
@@ -834,9 +833,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // BBR 3,BP
+            // BBR 3,B
             0x3F => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let branch = self.fetch(bus) as i8;
                 let data = bus.read(addr);
                 if (data & (1 << 3)) == 0 {
@@ -855,9 +854,9 @@ impl BusDevice for Cpu {
                 self.pc = [lo, hi];
             }
 
-            // EOR (BP,X)
+            // EOR (B,X)
             0x41 => {
-                let addr = self.addr_bp_indirect_x(bus);
+                let addr = self.addr_b_indirect_x(bus);
                 let data = bus.read(addr);
                 self.a ^= data;
                 self.set_flag(Flags::NEGATIVE, (self.a & 0x80) != 0);
@@ -880,9 +879,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, self.a == 0);
             }
 
-            // ASR BP
+            // ASR B
             0x44 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let (data, carry) = (data as i8).overflowing_shr(1);
                 let data = data as u8;
@@ -892,18 +891,18 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, data == 0);
             }
 
-            // EOR BP
+            // EOR B
             0x45 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 self.a ^= data;
                 self.set_flag(Flags::NEGATIVE, (self.a & 0x80) != 0);
                 self.set_flag(Flags::ZERO, self.a == 0);
             }
 
-            // LSR BP
+            // LSR B
             0x46 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let (data, carry) = data.overflowing_shr(1);
                 bus.write(addr, data);
@@ -912,9 +911,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, data == 0);
             }
 
-            // RMB 4,BP
+            // RMB 4,B
             0x47 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let data = data & !(1 << 4);
                 bus.write(addr, data);
@@ -975,9 +974,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, data == 0);
             }
 
-            // BBR 4,BP
+            // BBR 4,B
             0x4F => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let branch = self.fetch(bus) as i8;
                 let data = bus.read(addr);
                 if (data & (1 << 4)) == 0 {
@@ -997,18 +996,18 @@ impl BusDevice for Cpu {
                 }
             }
 
-            // EOR (BP),Y
+            // EOR (B),Y
             0x51 => {
-                let addr = self.addr_bp_indirect_y(bus);
+                let addr = self.addr_b_indirect_y(bus);
                 let data = bus.read(addr);
                 self.a ^= data;
                 self.set_flag(Flags::NEGATIVE, (self.a & 0x80) != 0);
                 self.set_flag(Flags::ZERO, self.a == 0);
             }
 
-            // EOR (BP),Z
+            // EOR (B),Z
             0x52 => {
-                let addr = self.addr_bp_indirect_z(bus);
+                let addr = self.addr_b_indirect_z(bus);
                 let data = bus.read(addr);
                 self.a ^= data;
                 self.set_flag(Flags::NEGATIVE, (self.a & 0x80) != 0);
@@ -1027,9 +1026,9 @@ impl BusDevice for Cpu {
                 }
             }
 
-            // ASR BP,X
+            // ASR B,X
             0x54 => {
-                let addr = self.addr_bp_x(bus);
+                let addr = self.addr_b_x(bus);
                 let data = bus.read(addr);
                 let (data, carry) = (data as i8).overflowing_shr(1);
                 let data = data as u8;
@@ -1039,18 +1038,18 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, data == 0);
             }
 
-            // EOR BP,X
+            // EOR B,X
             0x55 => {
-                let addr = self.addr_bp_x(bus);
+                let addr = self.addr_b_x(bus);
                 let data = bus.read(addr);
                 self.a ^= data;
                 self.set_flag(Flags::NEGATIVE, (self.a & 0x80) != 0);
                 self.set_flag(Flags::ZERO, self.a == 0);
             }
 
-            // LSR BP,X
+            // LSR B,X
             0x56 => {
-                let addr = self.addr_bp_x(bus);
+                let addr = self.addr_b_x(bus);
                 let data = bus.read(addr);
                 let (data, carry) = data.overflowing_shr(1);
                 bus.write(addr, data);
@@ -1059,9 +1058,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, data == 0);
             }
 
-            // RMB 5,BP
+            // RMB 5,B
             0x57 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let data = data & !(1 << 5);
                 bus.write(addr, data);
@@ -1118,9 +1117,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, data == 0);
             }
 
-            // BBR 5,BP
+            // BBR 5,B
             0x5F => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let branch = self.fetch(bus) as i8;
                 let data = bus.read(addr);
                 if (data & (1 << 5)) == 0 {
@@ -1137,9 +1136,9 @@ impl BusDevice for Cpu {
                 self.pc = [lo, hi];
             }
 
-            // ADC (BP,X)
+            // ADC (B,X)
             0x61 => {
-                let addr = self.addr_bp_indirect_x(bus);
+                let addr = self.addr_b_indirect_x(bus);
                 let data = bus.read(addr);
                 let (result, carry1) = self.a.overflowing_add(data);
                 let (result, carry2) =
@@ -1178,15 +1177,15 @@ impl BusDevice for Cpu {
                     .to_le_bytes();
             }
 
-            // STZ BP
+            // STZ B
             0x64 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 bus.write(addr, self.z);
             }
 
-            // ADC BP
+            // ADC B
             0x65 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let (result, carry1) = self.a.overflowing_add(data);
                 let (result, carry2) =
@@ -1199,9 +1198,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, self.a == 0);
             }
 
-            // ROR BP
+            // ROR B
             0x66 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let (result, carry) = data.overflowing_shr(1);
                 let result = result | ((self.p & Flags::CARRY) << 7);
@@ -1211,9 +1210,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // RMB 6,BP
+            // RMB 6,B
             0x67 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let data = data & !(1 << 6);
                 bus.write(addr, data);
@@ -1289,9 +1288,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // BBR 6,BP
+            // BBR 6,B
             0x6F => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let branch = self.fetch(bus) as i8;
                 let data = bus.read(addr);
                 if (data & (1 << 6)) == 0 {
@@ -1311,9 +1310,9 @@ impl BusDevice for Cpu {
                 }
             }
 
-            // ADC (BP),Y
+            // ADC (B),Y
             0x71 => {
-                let addr = self.addr_bp_indirect_y(bus);
+                let addr = self.addr_b_indirect_y(bus);
                 let data = bus.read(addr);
                 let (result, carry1) = self.a.overflowing_add(data);
                 let (result, carry2) =
@@ -1326,9 +1325,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, self.a == 0);
             }
 
-            // ADC (BP),Z
+            // ADC (B),Z
             0x72 => {
-                let addr = self.addr_bp_indirect_z(bus);
+                let addr = self.addr_b_indirect_z(bus);
                 let data = bus.read(addr);
                 let (result, carry1) = self.a.overflowing_add(data);
                 let (result, carry2) =
@@ -1353,15 +1352,15 @@ impl BusDevice for Cpu {
                 }
             }
 
-            // STZ BP,X
+            // STZ B,X
             0x74 => {
-                let addr = self.addr_bp_x(bus);
+                let addr = self.addr_b_x(bus);
                 bus.write(addr, self.z);
             }
 
-            // ADC BP,X
+            // ADC B,X
             0x75 => {
-                let addr = self.addr_bp_x(bus);
+                let addr = self.addr_b_x(bus);
                 let data = bus.read(addr);
                 let (result, carry1) = self.a.overflowing_add(data);
                 let (result, carry2) =
@@ -1374,9 +1373,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, self.a == 0);
             }
 
-            // ROR BP,X
+            // ROR B,X
             0x76 => {
-                let addr = self.addr_bp_x(bus);
+                let addr = self.addr_b_x(bus);
                 let data = bus.read(addr);
                 let (result, carry) = data.overflowing_shr(1);
                 let result = result | ((self.p & Flags::CARRY) << 7);
@@ -1386,9 +1385,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // RMB 7,BP
+            // RMB 7,B
             0x77 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let data = data & !(1 << 7);
                 bus.write(addr, data);
@@ -1461,9 +1460,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // BBR 7,BP
+            // BBR 7,B
             0x7F => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let branch = self.fetch(bus) as i8;
                 let data = bus.read(addr);
                 if (data & (1 << 7)) == 0 {
@@ -1481,9 +1480,9 @@ impl BusDevice for Cpu {
                     .to_le_bytes();
             }
 
-            // STA (BP,X)
+            // STA (B,X)
             0x81 => {
-                let addr = self.addr_bp_indirect_x(bus);
+                let addr = self.addr_b_indirect_x(bus);
                 bus.write(addr, self.a);
             }
 
@@ -1503,27 +1502,27 @@ impl BusDevice for Cpu {
                     .to_le_bytes();
             }
 
-            // STY BP
+            // STY B
             0x84 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 bus.write(addr, self.y);
             }
 
-            // STA BP
+            // STA B
             0x85 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 bus.write(addr, self.a);
             }
 
-            // STX BP
+            // STX B
             0x86 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 bus.write(addr, self.x);
             }
 
-            // SMB 0,BP
+            // SMB 0,B
             0x87 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let data = data | (1 << 0);
                 bus.write(addr, data);
@@ -1575,9 +1574,9 @@ impl BusDevice for Cpu {
                 bus.write(addr, self.x);
             }
 
-            // BBS 0,BP
+            // BBS 0,B
             0x8F => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let branch = self.fetch(bus) as i8;
                 let data = bus.read(addr);
                 if (data & (1 << 0)) != 0 {
@@ -1597,15 +1596,15 @@ impl BusDevice for Cpu {
                 }
             }
 
-            // STA (BP),Y
+            // STA (B),Y
             0x91 => {
-                let addr = self.addr_bp_indirect_y(bus);
+                let addr = self.addr_b_indirect_y(bus);
                 bus.write(addr, self.a);
             }
 
-            // STA (BP),Z
+            // STA (B),Z
             0x92 => {
-                let addr = self.addr_bp_indirect_z(bus);
+                let addr = self.addr_b_indirect_z(bus);
                 bus.write(addr, self.a);
             }
 
@@ -1621,27 +1620,27 @@ impl BusDevice for Cpu {
                 }
             }
 
-            // STY BP,X
+            // STY B,X
             0x94 => {
-                let addr = self.addr_bp_x(bus);
+                let addr = self.addr_b_x(bus);
                 bus.write(addr, self.y);
             }
 
-            // STA BP,X
+            // STA B,X
             0x95 => {
-                let addr = self.addr_bp_x(bus);
+                let addr = self.addr_b_x(bus);
                 bus.write(addr, self.a);
             }
 
-            // STX BP,Y
+            // STX B,Y
             0x96 => {
-                let addr = self.addr_bp_y(bus);
+                let addr = self.addr_b_y(bus);
                 bus.write(addr, self.a);
             }
 
-            // SMB 1,BP
+            // SMB 1,B
             0x97 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let data = data | (1 << 1);
                 bus.write(addr, data);
@@ -1690,9 +1689,9 @@ impl BusDevice for Cpu {
                 bus.write(addr, self.z);
             }
 
-            // BBS 1,BP
+            // BBS 1,B
             0x9F => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let branch = self.fetch(bus) as i8;
                 let data = bus.read(addr);
                 if (data & (1 << 1)) != 0 {
@@ -1709,9 +1708,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, self.y == 0);
             }
 
-            // LDA (BP,X)
+            // LDA (B,X)
             0xA1 => {
-                let addr = self.addr_bp_indirect_x(bus);
+                let addr = self.addr_b_indirect_x(bus);
                 self.a = bus.read(addr);
                 self.set_flag(Flags::NEGATIVE, (self.a & 0x80) != 0);
                 self.set_flag(Flags::ZERO, self.a == 0);
@@ -1731,33 +1730,33 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, self.z == 0);
             }
 
-            // LDY BP
+            // LDY B
             0xA4 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 self.y = bus.read(addr);
                 self.set_flag(Flags::NEGATIVE, (self.y & 0x80) != 0);
                 self.set_flag(Flags::ZERO, self.y == 0);
             }
 
-            // LDA BP
+            // LDA B
             0xA5 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 self.a = bus.read(addr);
                 self.set_flag(Flags::NEGATIVE, (self.a & 0x80) != 0);
                 self.set_flag(Flags::ZERO, self.a == 0);
             }
 
-            // LDX BP
+            // LDX B
             0xA6 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 self.x = bus.read(addr);
                 self.set_flag(Flags::NEGATIVE, (self.x & 0x80) != 0);
                 self.set_flag(Flags::ZERO, self.x == 0);
             }
 
-            // SMB 2,BP
+            // SMB 2,B
             0xA7 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let data = data | (1 << 2);
                 bus.write(addr, data);
@@ -1816,9 +1815,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, self.x == 0);
             }
 
-            // BBS 2,BP
+            // BBS 2,B
             0xAF => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let branch = self.fetch(bus) as i8;
                 let data = bus.read(addr);
                 if (data & (1 << 2)) != 0 {
@@ -1838,17 +1837,17 @@ impl BusDevice for Cpu {
                 }
             }
 
-            // LDA (BP),Y
+            // LDA (B),Y
             0xB1 => {
-                let addr = self.addr_bp_indirect_y(bus);
+                let addr = self.addr_b_indirect_y(bus);
                 self.a = bus.read(addr);
                 self.set_flag(Flags::NEGATIVE, (self.a & 0x80) != 0);
                 self.set_flag(Flags::ZERO, self.a == 0);
             }
 
-            // LDA (BP),Z
+            // LDA (B),Z
             0xB2 => {
-                let addr = self.addr_bp_indirect_z(bus);
+                let addr = self.addr_b_indirect_z(bus);
                 self.a = bus.read(addr);
                 self.set_flag(Flags::NEGATIVE, (self.a & 0x80) != 0);
                 self.set_flag(Flags::ZERO, self.a == 0);
@@ -1866,33 +1865,33 @@ impl BusDevice for Cpu {
                 }
             }
 
-            // LDY BP,X
+            // LDY B,X
             0xB4 => {
-                let addr = self.addr_bp_x(bus);
+                let addr = self.addr_b_x(bus);
                 self.y = bus.read(addr);
                 self.set_flag(Flags::NEGATIVE, (self.y & 0x80) != 0);
                 self.set_flag(Flags::ZERO, self.y == 0);
             }
 
-            // LDA BP,X
+            // LDA B,X
             0xB5 => {
-                let addr = self.addr_bp_x(bus);
+                let addr = self.addr_b_x(bus);
                 self.a = bus.read(addr);
                 self.set_flag(Flags::NEGATIVE, (self.a & 0x80) != 0);
                 self.set_flag(Flags::ZERO, self.a == 0);
             }
 
-            // LDX BP,Y
+            // LDX B,Y
             0xB6 => {
-                let addr = self.addr_bp_x(bus);
+                let addr = self.addr_b_x(bus);
                 self.x = bus.read(addr);
                 self.set_flag(Flags::NEGATIVE, (self.x & 0x80) != 0);
                 self.set_flag(Flags::ZERO, self.x == 0);
             }
 
-            // SMB 3,BP
+            // SMB 3,B
             0xB7 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let data = data | (1 << 3);
                 bus.write(addr, data);
@@ -1950,9 +1949,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, self.x == 0);
             }
 
-            // BBS 3,BP
+            // BBS 3,B
             0xBF => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let branch = self.fetch(bus) as i8;
                 let data = bus.read(addr);
                 if (data & (1 << 3)) != 0 {
@@ -1971,9 +1970,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // CMP (BP,X)
+            // CMP (B,X)
             0xC1 => {
-                let addr = self.addr_bp_indirect_x(bus);
+                let addr = self.addr_b_indirect_x(bus);
                 let data = bus.read(addr);
                 let (result, carry) = self.a.overflowing_sub(data);
                 self.set_flag(Flags::CARRY, carry);
@@ -1990,9 +1989,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // DEW BP
+            // DEW B
             0xC3 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let lo = bus.read(addr);
                 let hi = bus.read(addr.wrapping_add(1));
                 let result = u16::from_le_bytes([lo, hi]).wrapping_sub(1);
@@ -2003,9 +2002,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // CPY BP
+            // CPY B
             0xC4 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let (result, carry) = self.y.overflowing_sub(data);
                 self.set_flag(Flags::CARRY, carry);
@@ -2013,9 +2012,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // CMP BP
+            // CMP B
             0xC5 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let (result, carry) = self.a.overflowing_sub(data);
                 self.set_flag(Flags::CARRY, carry);
@@ -2023,9 +2022,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // DEC BP
+            // DEC B
             0xC6 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let result = data.wrapping_sub(1);
                 bus.write(addr, result);
@@ -2033,9 +2032,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // SMB 4,BP
+            // SMB 4,B
             0xC7 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let data = data | (1 << 4);
                 bus.write(addr, data);
@@ -2066,7 +2065,7 @@ impl BusDevice for Cpu {
 
             // ASW ABS
             0xCB => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let lo = bus.read(addr);
                 let hi = bus.read(addr.wrapping_add(1));
                 let (result, carry) = u16::from_le_bytes([lo, hi]).overflowing_shl(1);
@@ -2108,9 +2107,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // BBS 4,BP
+            // BBS 4,B
             0xCF => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let branch = self.fetch(bus) as i8;
                 let data = bus.read(addr);
                 if (data & (1 << 4)) != 0 {
@@ -2130,9 +2129,9 @@ impl BusDevice for Cpu {
                 }
             }
 
-            // CMP (BP),Y
+            // CMP (B),Y
             0xD1 => {
-                let addr = self.addr_bp_indirect_y(bus);
+                let addr = self.addr_b_indirect_y(bus);
                 let data = bus.read(addr);
                 let (result, carry) = self.a.overflowing_sub(data);
                 self.set_flag(Flags::CARRY, carry);
@@ -2140,9 +2139,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // CMP (BP),Z
+            // CMP (B),Z
             0xD2 => {
-                let addr = self.addr_bp_indirect_z(bus);
+                let addr = self.addr_b_indirect_z(bus);
                 let data = bus.read(addr);
                 let (result, carry) = self.a.overflowing_sub(data);
                 self.set_flag(Flags::CARRY, carry);
@@ -2162,9 +2161,9 @@ impl BusDevice for Cpu {
                 }
             }
 
-            // CPZ BP
+            // CPZ B
             0xD4 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let (result, carry) = self.z.overflowing_sub(data);
                 self.set_flag(Flags::CARRY, carry);
@@ -2172,9 +2171,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // CMP BP,X
+            // CMP B,X
             0xD5 => {
-                let addr = self.addr_bp_x(bus);
+                let addr = self.addr_b_x(bus);
                 let data = bus.read(addr);
                 let (result, carry) = self.a.overflowing_sub(data);
                 self.set_flag(Flags::CARRY, carry);
@@ -2182,9 +2181,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // DEC BP,X
+            // DEC B,X
             0xD6 => {
-                let addr = self.addr_bp_x(bus);
+                let addr = self.addr_b_x(bus);
                 let data = bus.read(addr);
                 let result = data.wrapping_sub(1);
                 bus.write(addr, result);
@@ -2192,9 +2191,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // SMB 5,BP
+            // SMB 5,B
             0xD7 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let data = data | (1 << 5);
                 bus.write(addr, data);
@@ -2255,9 +2254,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // BBS 5,BP
+            // BBS 5,B
             0xDF => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let branch = self.fetch(bus) as i8;
                 let data = bus.read(addr);
                 if (data & (1 << 5)) != 0 {
@@ -2276,9 +2275,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // SBC (BP,X)
+            // SBC (B,X)
             0xE1 => {
-                let addr = self.addr_bp_indirect_x(bus);
+                let addr = self.addr_b_indirect_x(bus);
                 let data = !bus.read(addr); // invert arg and adc
                 let (result, carry1) = self.a.overflowing_add(data);
                 let (result, carry2) =
@@ -2299,9 +2298,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, self.a == 0);
             }
 
-            // INW BP
+            // INW B
             0xE3 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let lo = bus.read(addr);
                 let hi = bus.read(addr.wrapping_add(1));
                 let result = u16::from_le_bytes([lo, hi]).wrapping_add(1);
@@ -2312,9 +2311,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // CPX BP
+            // CPX B
             0xE4 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let (result, carry) = self.x.overflowing_sub(data);
                 self.set_flag(Flags::CARRY, carry);
@@ -2322,9 +2321,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // SBC BP
+            // SBC B
             0xE5 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = !bus.read(addr); // invert arg and adc
                 let (result, carry1) = self.a.overflowing_add(data);
                 let (result, carry2) =
@@ -2337,9 +2336,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, self.a == 0);
             }
 
-            // INC BP
+            // INC B
             0xE6 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let result = data.wrapping_add(1);
                 bus.write(addr, result);
@@ -2347,9 +2346,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // SMB 6,BP
+            // SMB 6,B
             0xE7 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let data = data | (1 << 6);
                 bus.write(addr, data);
@@ -2381,7 +2380,7 @@ impl BusDevice for Cpu {
 
             // ROW
             0xEB => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let lo = bus.read(addr);
                 let hi = bus.read(addr.wrapping_add(1));
                 let (result, carry) = u16::from_le_bytes([lo, hi]).overflowing_shl(1);
@@ -2428,9 +2427,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // BBS 6,BP
+            // BBS 6,B
             0xEF => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let branch = self.fetch(bus) as i8;
                 let data = bus.read(addr);
                 if (data & (1 << 6)) != 0 {
@@ -2450,9 +2449,9 @@ impl BusDevice for Cpu {
                 }
             }
 
-            // SBC (BP),Y
+            // SBC (B),Y
             0xF1 => {
-                let addr = self.addr_bp_indirect_y(bus);
+                let addr = self.addr_b_indirect_y(bus);
                 let data = !bus.read(addr); // invert arg and adc
                 let (result, carry1) = self.a.overflowing_add(data);
                 let (result, carry2) =
@@ -2465,9 +2464,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, self.a == 0);
             }
 
-            // SBC (BP),Z
+            // SBC (B),Z
             0xF2 => {
-                let addr = self.addr_bp_indirect_z(bus);
+                let addr = self.addr_b_indirect_z(bus);
                 let data = !bus.read(addr); // invert arg and adc
                 let (result, carry1) = self.a.overflowing_add(data);
                 let (result, carry2) =
@@ -2500,9 +2499,9 @@ impl BusDevice for Cpu {
                 self.push(bus, lo);
             }
 
-            // SBC BP,X
+            // SBC B,X
             0xF5 => {
-                let addr = self.addr_bp_x(bus);
+                let addr = self.addr_b_x(bus);
                 let data = !bus.read(addr); // invert arg and adc
                 let (result, carry1) = self.a.overflowing_add(data);
                 let (result, carry2) =
@@ -2515,9 +2514,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, self.a == 0);
             }
 
-            // INC BP,X
+            // INC B,X
             0xF6 => {
-                let addr = self.addr_bp_x(bus);
+                let addr = self.addr_b_x(bus);
                 let data = bus.read(addr);
                 let result = data.wrapping_add(1);
                 bus.write(addr, result);
@@ -2525,9 +2524,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // SMB 7,BP
+            // SMB 7,B
             0xF7 => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let data = bus.read(addr);
                 let data = data | (1 << 7);
                 bus.write(addr, data);
@@ -2601,9 +2600,9 @@ impl BusDevice for Cpu {
                 self.set_flag(Flags::ZERO, result == 0);
             }
 
-            // BBS 7,BP
+            // BBS 7,B
             0xFF => {
-                let addr = self.addr_bp(bus);
+                let addr = self.addr_b(bus);
                 let branch = self.fetch(bus) as i8;
                 let data = bus.read(addr);
                 if (data & (1 << 7)) != 0 {
