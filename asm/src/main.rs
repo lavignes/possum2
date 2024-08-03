@@ -123,66 +123,6 @@ fn pass(asm: &mut Asm) -> Result<(), Box<dyn Error>> {
             continue;
         }
 
-        // macro?
-        if asm.lexer_mut().peek()? == IDENT {
-            if let Some(mac) = asm
-                .macros
-                .iter()
-                .find(|mac| mac.name == asm.lexer().string())
-                .cloned()
-            {
-                asm.lexer_mut().eat();
-                let mut args = Vec::new();
-                let mut arg_strings = Vec::new();
-                loop {
-                    match asm.lexer_mut().peek()? {
-                        NEWLINE | EOF => {
-                            break;
-                        }
-                        tok @ (IDENT | STRING) => {
-                            args.push(MacroToken {
-                                inner: tok,
-                                string_index: arg_strings.len(),
-                                number: 0,
-                                line: asm.lexer().line(),
-                            });
-                            arg_strings.push(asm.lexer().string().to_string());
-                        }
-                        NUMBER => args.push(MacroToken {
-                            inner: NUMBER,
-                            string_index: 0,
-                            number: asm.lexer().number(),
-                            line: asm.lexer().line(),
-                        }),
-                        tok => args.push(MacroToken {
-                            inner: tok,
-                            string_index: 0,
-                            number: 0,
-                            line: asm.lexer().line(),
-                        }),
-                    }
-                    asm.lexer_mut().eat();
-                    if asm.lexer_mut().peek()? != COMMA {
-                        break;
-                    }
-
-                    asm.lexer_mut().eat();
-                }
-                end_of_line(asm)?;
-                // todo: invocation constructor
-                let invocation = MacroInvocation {
-                    inner: mac,
-                    invocation_line: asm.lexer().line(),
-                    pos: 0,
-                    string: String::new(),
-                    args,
-                    arg_strings,
-                };
-                asm.lexers.push(Box::new(invocation));
-                continue;
-            }
-        }
-
         // label?
         if asm.lexer_mut().peek()? == IDENT
             && !asm.lexer().string().eq_ignore_ascii_case("EQU")
@@ -254,6 +194,66 @@ fn pass(asm: &mut Asm) -> Result<(), Box<dyn Error>> {
 
             // otherwise it is a pointer to the current PC
             asm.syms[sym_index].1 = asm.pc() as u32 as i32;
+        }
+
+        // macro?
+        if asm.lexer_mut().peek()? == IDENT {
+            if let Some(mac) = asm
+                .macros
+                .iter()
+                .find(|mac| mac.name == asm.lexer().string())
+                .cloned()
+            {
+                asm.lexer_mut().eat();
+                let mut args = Vec::new();
+                let mut arg_strings = Vec::new();
+                loop {
+                    match asm.lexer_mut().peek()? {
+                        NEWLINE | EOF => {
+                            break;
+                        }
+                        tok @ (IDENT | STRING) => {
+                            args.push(MacroToken {
+                                inner: tok,
+                                string_index: arg_strings.len(),
+                                number: 0,
+                                line: asm.lexer().line(),
+                            });
+                            arg_strings.push(asm.lexer().string().to_string());
+                        }
+                        NUMBER => args.push(MacroToken {
+                            inner: NUMBER,
+                            string_index: 0,
+                            number: asm.lexer().number(),
+                            line: asm.lexer().line(),
+                        }),
+                        tok => args.push(MacroToken {
+                            inner: tok,
+                            string_index: 0,
+                            number: 0,
+                            line: asm.lexer().line(),
+                        }),
+                    }
+                    asm.lexer_mut().eat();
+                    if asm.lexer_mut().peek()? != COMMA {
+                        break;
+                    }
+
+                    asm.lexer_mut().eat();
+                }
+                end_of_line(asm)?;
+                // todo: invocation constructor
+                let invocation = MacroInvocation {
+                    inner: mac,
+                    invocation_line: asm.lexer().line(),
+                    pos: 0,
+                    string: String::new(),
+                    args,
+                    arg_strings,
+                };
+                asm.lexers.push(Box::new(invocation));
+                continue;
+            }
         }
 
         if asm.bss_mode {
@@ -710,7 +710,14 @@ fn operand(asm: &mut Asm, op: &Op) -> io::Result<()> {
         let expr = expr(asm)?;
         // can we optimize the branch into a single byte?
         if let Some(expr) = expr {
-            let branch = expr - ((asm.pc() as u32 as i32) + 2); // branch needs +2 (size of instr)
+            let branch = expr - (asm.pc() as u32 as i32);
+            let branch = if branch > 0 {
+                // branch needs -3
+                branch - 3
+            } else {
+                // branch needs -2
+                branch - 2
+            };
             if (branch >= (i8::MIN as i32))
                 && (branch <= (i8::MAX as i32))
                 // sad hack. bsr is always word-relative
@@ -719,8 +726,6 @@ fn operand(asm: &mut Asm, op: &Op) -> io::Result<()> {
                 let branch = branch as i8 as u8;
                 if asm.emit {
                     asm.write(&[op.1.iter().find(|(mode, _)| *mode == REL).unwrap().1])?;
-                }
-                if asm.emit {
                     asm.write(&[branch])?;
                 }
                 asm.add_pc(2)?;

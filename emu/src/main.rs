@@ -782,7 +782,7 @@ fn dissasemble(
                 addr += 1;
                 let hi = mem.read(addr);
                 addr += 1;
-                print!(" {lo:02X} {hi:02X}    ");
+                print!(" {lo:02X} {hi:02X}   ");
                 print!(
                     "  {}{name} {}${hi:02X}{lo:02X}{},{}Y{}        ",
                     Fg(LightMagenta),

@@ -26,16 +26,20 @@ SER0_CTRL	equ $F013
 BANK0		equ $F000
 INT_LATCH	equ $F0FF
 
+; pointer registers in base page
 		bss
 *		equ $0000
-ksp		pad 2
+Rsrc		pad 2
+Rdst		pad 2
+Rcnt		pad 2		; general counter
+Rsbp		pad 2		; stack-base pointer
 
 		txt
 *		equ $F100
 
 ; copy A to (SP) Y times
 MemSet		cpy #0
-		jmp .chk	; todo: a bru .chk computes the wrong addr!
+		bru .chk
 .set		dey
 		sta (2,sp),y
 .chk		bne .set
@@ -64,6 +68,11 @@ Reset		cle     	; enable extended SP
 		sta SER0_STATUS	; reset uart
 		lda #$09	; rx interrupt enable, turn on
 		sta SER0_CMD
+
+		tsy		; save kernel SP in Rsbp
+		tya
+		sta Rsbp+1
+
 		cli
 		bru *
 
@@ -81,8 +90,7 @@ Ser0Rx		lda SER0_STATUS
 		lda SER0_DATA
 		rts
 
-Irq
-		PUSH_ALL	; store regs on user stack
+Irq		PUSH_ALL	; store regs on user stack
 
 		ldy #5		; read user flags off user stack
 		lda (0,sp),y	; and save them in B for a while
@@ -96,11 +104,11 @@ Irq
 		sta BANK0	; switch to kernel bank 0
 
 		txa		; restore kernel SP
-		ldx |ksp+0
+		ldx |Rsrp+0
 		txs
 		tax
 		tya
-		ldy |ksp+1
+		ldy |Rsrp+1
 		tys
 		tay
 

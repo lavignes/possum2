@@ -285,7 +285,7 @@ where
     fn read(&mut self, addr: u16) -> u8 {
         match addr {
             0xF000..=0xF00E => self.mem.bank_select[(addr as usize) - 0xF000] as u8,
-            0xF004..=0xF00F => 0,
+            0xF00F => 0,
             0xF010..=0xF013 => self.ser0.read(addr - 0xF010),
             0xF014..=0xF017 => self.ser1.read(addr - 0xF014),
             0xF024..=0xF029 => todo!("reading io address {addr:04X}"),
@@ -306,7 +306,7 @@ where
             0xF000..=0xF00E => {
                 self.mem.bank_select[(addr as usize) - 0xF000] = (data & 0b11) as usize
             }
-            0xF004..=0xF00F => {}
+            0xF00F => {}
             0xF010..=0xF013 => self.ser0.write(addr - 0xF010, data),
             0xF014..=0xF017 => self.ser1.write(addr - 0xF014, data),
             0xF024..=0xF029 => todo!("writing to io address {addr:04X}"),
